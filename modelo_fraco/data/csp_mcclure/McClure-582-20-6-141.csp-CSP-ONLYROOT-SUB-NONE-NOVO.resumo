@@ -1,0 +1,2 @@
+filename;alpha_size;sc_size;sf_size;string_size;frac;inteiras;lb;ub;root_lb,nodes,time;status;heuristica;valor
+McClure-582-20-6-141.csp;20;6;0;105;0.000000;100000000000000000000.000000;0.000000;1;1801.974579;2;0.000000;100000000000000000000.000000;0.000000;1801.974579;2;NONE;NONE
