@@ -19,6 +19,7 @@ Notice that in order to run SCIP a license is required, but SCIP offers an Acade
 
 During compilation, the make command executed builds a object depending on the arguments passed trhough command line. They are:
 
+```
 TRACE         =       NOTRACE
 # NOTRACE : shows no debug information
 # DEBUG   : display debug prints trhough execution
@@ -70,6 +71,7 @@ OMEGA = OMEGAM
 
 IMPROVEMENT=BEST
 #BEST, FIRST
+```
 
 Example
 
