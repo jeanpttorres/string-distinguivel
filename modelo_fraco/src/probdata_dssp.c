@@ -65,6 +65,7 @@ Modificações:
 #include "scip/cons_linear.h"
 #include "scip/cons_setppc.h"
 #include "scip/scip.h"
+#include "parameters_dssp.h"
 
 /** @brief Problem data which is accessible in all places
  *
@@ -86,7 +87,7 @@ struct SCIP_ProbData
     int                 kf;             /**< df bound */
     char**              sc;             /**< array of strings Sc */
     char**              sf;             /**< array of strings Sf */
-    int*                sum_sc;         /**< array of length sum of Sc strings */
+    int*                sum_sc;         /**< array of length sum of Sc strings sum_sc[i]=total de substrings de tamanho string_size nas strings s_0, s_1, s_{i-1} em sc. Logo, sum_sc[sc_size+1] = total de substrings de tamanho string_size in sc */
     int*                sum_sf;         /**< array of length sum of Sf strings */
     char*               alphabet;       /**< array of alphabet characters */
     const char*         probname;       /**< filename of the instance */
@@ -347,7 +348,8 @@ SCIP_RETCODE SCIPprobdataCreate(
     char*               alphabet        /**< array of alphabet characters */
     )
 {
-  #ifdef NOVO
+   if(param.model_novo){
+      //  #ifdef NOVO
     int i, j, k, l, ncons, nvars;
      char name[SCIP_MAXSTRLEN];
      SCIP_PROBDATA* probdata;
@@ -378,11 +380,15 @@ SCIP_RETCODE SCIPprobdataCreate(
      SCIP_CALL(SCIPsetObjIntegral(scip));
 
     /* Number of constraints */
-    #if(defined CSP && defined SUB)
+     if(param.problem==CSP && param.substring){
+        //    #if(defined CSP && defined SUB)
         SCIP_CALL(SCIPallocBufferArray(scip, &conss, N_CONS_1 + N_CONS_2 + N_CONS_3 + N_CONS_4 + N_CONS_5 + N_CONS_6));
-    #else
+     }
+     else{
+        //    #else
         SCIP_CALL(SCIPallocBufferArray(scip, &conss, N_CONS_1 + N_CONS_2 + N_CONS_3 + N_CONS_4 + N_CONS_5));
-    #endif
+        //    #endif
+     }
      
      /* Number of variables */
      // SCIP_CALL(SCIPallocBufferArray(scip, &vars, VARS_X + VARS_Y + VARS_D));
@@ -427,13 +433,15 @@ SCIP_RETCODE SCIPprobdataCreate(
 	 SCIP_CALL(SCIPcreateConsBasicLinear (scip, &conss[i], "(5)", 0, NULL, NULL,  -SCIPinfinity(scip), string_size));
 	 SCIP_CALL(SCIPaddCons(scip, conss[i]));
      }
-     #if(defined CSP && defined SUB)
-     ncons = i;
-     for (; i < ncons + N_CONS_6; i++) {
-        SCIP_CALL(SCIPcreateConsBasicLinear (scip, &conss[i], "(6)", 0, NULL, NULL,  -SCIPinfinity(scip), 0));
-        SCIP_CALL(SCIPaddCons(scip, conss[i]));
+     if(param.problem==CSP && param.substring){
+        //     #if(defined CSP && defined SUB)
+        ncons = i;
+        for (; i < ncons + N_CONS_6; i++) {
+           SCIP_CALL(SCIPcreateConsBasicLinear (scip, &conss[i], "(6)", 0, NULL, NULL,  -SCIPinfinity(scip), 0));
+           SCIP_CALL(SCIPaddCons(scip, conss[i]));
+        }
+        //     #endif
      }
-     #endif
 
 
 
@@ -494,9 +502,11 @@ SCIP_RETCODE SCIPprobdataCreate(
 				 if (symbol_value(alphabet, alpha_size, l) == sf[z][w+j])
 				     SCIP_CALL(SCIPaddCoefLinear(scip, conss[N_ROWS_5(z, w)], var, 1.0));
 
-             #if(defined CSP && defined SUB)
-                SCIP_CALL(SCIPaddCoefLinear(scip, conss[N_ROWS_6(i, l)], var, -1.0));
-             #endif
+                     if(param.problem==CSP && param.substring){
+                        //             #if(defined CSP && defined SUB)
+                        SCIP_CALL(SCIPaddCoefLinear(scip, conss[N_ROWS_6(i, l)], var, -1.0));
+                        //             #endif
+                     }
 
 		 }
 	     }
@@ -510,11 +520,15 @@ SCIP_RETCODE SCIPprobdataCreate(
      SCIPdebugMessage("create variable %s\n", name);
 
      /* create a basic variable object */
-#ifdef FSP
-    SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 0.0, 1.0, SCIP_VARTYPE_INTEGER));
-#else
-    SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, (double) kc, 1.0, SCIP_VARTYPE_INTEGER));
-#endif
+     if(param.problem==FSP){
+        //#ifdef FSP
+        SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 0.0, 1.0, SCIP_VARTYPE_INTEGER));
+     }
+     else{
+        //#else
+        SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, (double) kc, 1.0, SCIP_VARTYPE_INTEGER));
+        //#endif
+     }
      assert(var != NULL);
 
      vars[nvars++] = var;
@@ -526,11 +540,13 @@ SCIP_RETCODE SCIPprobdataCreate(
      /* add variable to constraint (4) */
      for (i = 0; i < sc_size; i++) {
 	    SCIP_CALL(SCIPaddCoefLinear(scip, conss[N_ROWS_4(i)], var, -1.0));
-        #if(defined CSP && defined SUB)
-            for (l = 0; l < alpha_size; l ++) {
-                SCIP_CALL(SCIPaddCoefLinear(scip, conss[N_ROWS_6(i, l)], var, -1.0));
+            if(param.problem==CSP && param.substring){
+               //        #if(defined CSP && defined SUB)
+               for (l = 0; l < alpha_size; l ++) {
+                  SCIP_CALL(SCIPaddCoefLinear(scip, conss[N_ROWS_6(i, l)], var, -1.0));
+               }
+               //        #endif
             }
-        #endif
 
      }
     
@@ -541,11 +557,15 @@ SCIP_RETCODE SCIPprobdataCreate(
      SCIPdebugMessage("create variable %s\n", name);
 
      /* create a basic variable object */
-#ifdef CSP
-    SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 0.0, -1.0, SCIP_VARTYPE_INTEGER));
-#else
-    SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, (double) kf, (double) string_size, -1.0, SCIP_VARTYPE_INTEGER));
-#endif     
+     if(param.problem==CSP){
+        //#ifdef CSP
+        SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 0.0, -1.0, SCIP_VARTYPE_INTEGER));
+     }
+     else{
+        //#else
+        SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, (double) kf, (double) string_size, -1.0, SCIP_VARTYPE_INTEGER));
+        //#endif
+     }
     
     assert(var != NULL);
 
@@ -563,8 +583,9 @@ SCIP_RETCODE SCIPprobdataCreate(
      /* create problem data */
      SCIP_CALL(probdataCreate(scip, &probdata, vars, conss, nvars, ncons, sc_size, sf_size, alpha_size, string_size, kc, kf, sc, sf, sum_sc, sum_sf, alphabet, probname));
 
+#ifdef DEBUG_VNS
      SCIP_CALL(SCIPwriteOrigProblem(scip, "dssp.lp", "lp", FALSE)); /* grava na saida padrao ou em file */
-
+#endif
      /* set user problem data */
      SCIP_CALL(SCIPsetProbData(scip, probdata));
 
@@ -573,7 +594,9 @@ SCIP_RETCODE SCIPprobdataCreate(
      SCIPfreeBufferArray(scip, &vars);
 
      return SCIP_OKAY;
- #else
+   }
+   else{
+     // #else
     int i, j, k, l, ncons, nvars;
     char name[SCIP_MAXSTRLEN];
     SCIP_PROBDATA* probdata;
@@ -732,11 +755,15 @@ SCIP_RETCODE SCIPprobdataCreate(
     SCIPdebugMessage("create variable %s\n", name);
 
     /* create a basic variable object */
-#ifdef FSP
-    SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 0.0, 1.0, SCIP_VARTYPE_INTEGER));
-#else
+    if(param.problem==FSP){
+       //#ifdef FSP
+       SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 0.0, 1.0, SCIP_VARTYPE_INTEGER));
+    }
+    else{
+       //#else
     SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, (double) kc, 1.0, SCIP_VARTYPE_INTEGER));
-#endif
+    //#endif
+    }
     
     assert(var != NULL);
 
@@ -760,11 +787,15 @@ SCIP_RETCODE SCIPprobdataCreate(
     SCIPdebugMessage("create variable %s\n", name);
 
     /* create a basic variable object */
-#ifdef CSP
-    SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 0.0, -1.0, SCIP_VARTYPE_INTEGER));
-#else
-    SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, (double) kf, (double) string_size, -1.0, SCIP_VARTYPE_INTEGER));
-#endif
+    if(param.problem==CSP){
+       //#ifdef CSP
+       SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 0.0, -1.0, SCIP_VARTYPE_INTEGER));
+    }
+    else{
+       //#else
+       SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, (double) kf, (double) string_size, -1.0, SCIP_VARTYPE_INTEGER));
+       //#endif
+    }
     assert(var != NULL);
 
     vars[nvars++] = var;
@@ -783,8 +814,9 @@ SCIP_RETCODE SCIPprobdataCreate(
     /* create problem data */
     SCIP_CALL(probdataCreate(scip, &probdata, vars, conss, nvars, ncons, sc_size, sf_size, alpha_size, string_size, kc, kf, sc, sf, sum_sc, sum_sf, alphabet, probname));
 
+#ifdef DEBUG_VNS
     SCIP_CALL(SCIPwriteOrigProblem(scip, "dssp.lp", "lp", FALSE)); /* grava na saida padrao ou em file */
-
+#endif
     /* set user problem data */
     SCIP_CALL(SCIPsetProbData(scip, probdata));
 
@@ -792,7 +824,8 @@ SCIP_RETCODE SCIPprobdataCreate(
     SCIPfreeBufferArray(scip, &conss);
     SCIPfreeBufferArray(scip, &vars);
     return SCIP_OKAY;
-  #endif
+    //  #endif
+   }
 }
 
 /** returns size of Sc */

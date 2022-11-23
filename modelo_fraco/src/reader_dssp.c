@@ -81,6 +81,7 @@
 
 #include "probdata_dssp.h"
 #include "reader_dssp.h"
+#include "parameters_dssp.h"
 
 /**@name Reader properties
  *
@@ -116,6 +117,12 @@ int getNextLine(SCIP_FILE* file, int* lineno, char* buffer)
 /** instance problem reader method */
 static
 SCIP_DECL_READERREAD(readerReaddssp)
+{
+   return readerDssp(scip, filename, result);
+}
+
+int readerDssp(SCIP* scip, const char* filename, SCIP_RESULT* result)
+   
 {  /*lint --e{715}*/
     SCIP_FILE* file;
     SCIP_Bool error = FALSE;
@@ -163,13 +170,16 @@ SCIP_DECL_READERREAD(readerReaddssp)
         /* Le tamanho dos conjuntos */
         nread = sscanf(buffer, "%d %d\n", &sc_size, &sf_size);
 
-#ifdef CSP
-    sf_size = 0;
-#endif
-
-#ifdef FSP
-    sc_size = 0;
-#endif
+        if(param.problem==CSP){
+           //#ifdef CSP
+           sf_size = 0;
+           //#endif
+        }
+        if(param.problem==FSP){
+           //#ifdef FSP
+           sc_size = 0;
+           //#endif
+        }
 
         // printf("\n\nSC_SIZE %d \n", sc_size); getchar();
         if(nread < 2)
@@ -198,13 +208,15 @@ SCIP_DECL_READERREAD(readerReaddssp)
 
         /* Le constantes kc e kf */
         nread = sscanf(buffer, "%d %d\n", &kc, &kf);
-        
-#ifdef SUB
-        if (string_size == kc) {
-            string_size = (int) (string_size*0.75);
-            kc = (int) (kc*0.75);
+
+        if(param.substring){
+           //#ifdef SUB
+           if (string_size == kc) {
+              string_size = (int) (string_size*0.75);
+              kc = (int) (kc*0.75);
+           }
+        //#endif
         }
-#endif
         
         if(nread < 2)
         {

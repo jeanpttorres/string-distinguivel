@@ -30,6 +30,12 @@
  *
  */
 
+/**
+ * SBPL version: OK. Changes were made in lpimprovement and lpshaking.
+ * BLPL version: BestImprovement has be included! Shaking was changed.  
+ * TODO: parameters settings
+ */
+
 #include <stdio.h>
 #include <time.h>
 #include <stdbool.h>
@@ -42,1203 +48,80 @@
 
 #include "probdata_dssp.h"
 #include "reader_dssp.h"
-#include "reader_csp.h"
+//#include "reader_csp.h"
 #include "parameters_dssp.h"
-#include "heur_myheuristic.h"
-#include "cons_xyz.h"
+//#include "heur_myheuristic.h"
+#include "utils.h"
+#include "ra.h"
+#include "bcpa.h"
+#include "vns.h"
 
+#define MAXINT 10e6
 
+const char* heurName[]={"none", "RA", "BCPA", "VBPL", "BLPL", "SBPL"};
 
-void printSol(SCIP *, char *, double);
-void validSol(SCIP *, char *);
-double heur_RA(SCIP* , char *);
-double heur_BCPA(SCIP* , char *);
-int valorSolucao(SCIP*, char *, int *);
-void printRelaxedSol(SCIP *, char *, double);
-SCIP_RETCODE setupProblem(
-    SCIP*                 scip                /**< SCIP data structure */,
-    SCIP*                 scip_o                /**< SCIP data structure */
-    );
+const char* problemName[]={"CSP", "FSP", "DSP"};
 
+parametersT param;
+// output path, path and filename of the instance
+const char* output_path;
+char input_path[SCIP_MAXSTRLEN];
+char* instance_filename;
+const char* current_path = ".";
+clock_t antes, agora;
+double tempoHeur, LB, UB;
+double firstUB, heurValue;
 
-int valorSolucao(SCIP *scip, char *filename, int *heur){
-   int i, j, k, l, dif, dc, df, menor_dif_sc, maior_dif_sf;
-    int  *sum_sc, *sum_sf, string_size, alpha_size, sc_size, sf_size;
-    char *alphabet, **sc, **sf;
+//typedef struct{
+//  char debug;
+//} compilingOptionsT;
 
-    SCIP_PROBDATA *probdata;
+void splitfullfilename(char* fullfilename);
+void configOutputName(char* name, char* probname, char* program);
+SCIP_RETCODE printStatistic(SCIP* scip, char* outputname, int dc, int df);//, char* program);
+SCIP_RETCODE configScip(SCIP** scip);
+int readInstance(SCIP* scip, char* filename);
+void printSol(SCIP* scip, char *filename, double tempo);
+//void printSol(SCIP* scip, int* profit, int* custo, char* outputname, compilingOptionsT* compilingOptions);
+void printHeurSol(SCIP* scip, char* filename, int* x, int dc, int df, double tempo);
+void printCompilerSettings(FILE* file);
+/** print best primal solution in file with extension ".sol"
+ *  and in graphwiz format .gr
+ */
+int contFrac(SCIP* scip);
 
-
-    assert(scip != NULL);
-
-    probdata = SCIPgetProbData(scip);
-    assert(probdata != NULL);
-
-
-    string_size = SCIPprobdataGetString_size(probdata);
-    alphabet = SCIPprobdataGetAlphabet(probdata);
-    alpha_size = SCIPprobdataGetAlpha_size(probdata);
-    sc = SCIPprobdataGetSc(probdata);
-    sf = SCIPprobdataGetSf(probdata);
-
-
-    sum_sc = SCIPprobdataGetSum_sc(probdata);
-    sum_sf = SCIPprobdataGetSum_sf(probdata);
-    sc_size = SCIPprobdataGetSc_size(probdata);
-    sf_size = SCIPprobdataGetSf_size(probdata);
- 
-    
-    
-    //Checar dc
-    dif = 0;
-    if (sc_size > 0) {
-      dc = -string_size;
-      for (i = 0; i < sc_size; i ++) {
-        menor_dif_sc = (sum_sc[i+1]+string_size-1) - sum_sc[i];
-        for (j = 0; j <= (sum_sc[i+1]+string_size-1) - sum_sc[i] -string_size ; j ++) {
-	  l = 0;
-	  dif = 0;
-          
-	  for (k = j; k < j + string_size; k ++) {
-	    if (symbol_value(alphabet, alpha_size, heur[l++]) != sc[i][k]) {
-	      dif ++;
-	    }
-            }
-	  menor_dif_sc = menor_dif_sc < dif ? menor_dif_sc : dif;
-          
-        }
-        dc = menor_dif_sc > dc ? menor_dif_sc : dc; 
-      }
-    }
-    else
-      dc = 0;
-    
-    //Checar se obedece em sf
-    if (sf_size > 0) {
-      df = string_size;
-      for (i = 0; i < sf_size; i ++) {
-        maior_dif_sf = -1;
-        for (j = 0; j <= (sum_sf[i+1]+string_size-1) - sum_sf[i] - string_size ; j ++) {
-	  l = 0;
-	  dif = 0;
-	  for (k = j; k < j + string_size; k ++) {
-	    if (symbol_value(alphabet, alpha_size, heur[l++]) != sf[i][k]) {
-	      dif ++;
-	    }
-	  }        
-	  // maior_dif_sf = dif > maior_dif_sf ? dif : maior_dif_sf;
-	  df = dif < df ? dif : df; 
-        }
-        
-      }
-    }
-    else
-      df = 0;
-
-
-    return dc - df;
+void splitfullfilename(char* fullfilename)
+{
+  // split fullfilename in path and filename
+  instance_filename = strrchr(fullfilename, '/');
+  if(instance_filename==NULL){
+     instance_filename = fullfilename;
+     input_path[0]='\0';
+  }
+  else{
+     instance_filename++; // discard /  
+     strncpy(input_path, fullfilename, instance_filename - fullfilename);
+     input_path[instance_filename-fullfilename]='\0';
+  }
 }
-
-// double heur_bcpa (SCIP* scip, char *filename) {
-//     int i, j, k, l, string_size, alpha_size, *heur;
-//     double ra;
-//     int bcpa;
-    
-//     FILE *file;
-//     int         sc_size;
-//     int*        sum_sc;
-//     char name[SCIP_MAXSTRLEN], **sc, *alphabet;
-
-//     SCIP_SOL *bestSolution;
-//     SCIP_PROBDATA *probdata;
-//     SCIP_VAR **vars, *var;
-//     SCIP_Real solval;
-
-//     assert(scip != NULL);
-    
-//     bestSolution = SCIPgetBestSol(scip);
-  
-//     probdata = SCIPgetProbData(scip);
-//     assert(probdata != NULL);
-
-//     // nvars = SCIPprobdataGetNVars(probdata);
-//     vars = SCIPprobdataGetVars(probdata);
-//     string_size = SCIPprobdataGetString_size(probdata);
-//     alphabet = SCIPprobdataGetAlphabet(probdata);
-//     alpha_size = SCIPprobdataGetAlpha_size(probdata);
-//     sc_size = SCIPprobdataGetSc_size(probdata) == 0 ? SCIPprobdataGetSf_size(probdata) : SCIPprobdataGetSc_size(probdata);
-//     sum_sc = SCIPprobdataGetSum_sc(probdata);
-//     sc = SCIPprobdataGetSc(probdata);
-
-//     #ifndef NOVO  
-//     (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "%s-antigo.heur-BCPA.sol", filename);
-// #else
-//     (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "%s-novo.heur-BCPA.sol", filename);
-// #endif
-//     file = fopen(name, "w");
-
-//     if(!file)
-//     {
-//         printf("\nProblem to create solution file: %s", name);
-//         return SCIP_INVALID;
-//     }
-
-//     SCIP*               scip_b;
-//     SCIP_PROBDATA* probdata_b;
-//     SCIP_CONS** conss_b;
-//     SCIP_VAR** vars_b, *var_b;
-//     char *probname;
-
-//     int ncons, nvars;
-
-//     SCIP_CALL( SCIPcreate(&scip_b) );
-
-//     /* include dssp reader */
-//     SCIP_CALL( SCIPincludeReaderDSSP(scip_b) );
-//     SCIP_CALL( SCIPincludeReadercsp(scip_b) );
-
-
-//     /* include default SCIP plugins */
-//     SCIP_CALL( SCIPincludeDefaultPlugins(scip)_b );
-
-//     /* for column generation instances, disable restarts */
-//     SCIP_CALL( SCIPsetIntParam(scip_b,"presolving/maxrestarts",0) );
-
-//     /* turn off all separation algorithms */
-//     SCIP_CALL( SCIPsetSeparating(scip_b, SCIP_PARAMSETTING_OFF, TRUE) );
-
-//     /* disable heuristics */
-//     SCIP_CALL( SCIPsetHeuristics(scip_b, SCIP_PARAMSETTING_OFF, TRUE) );
-
-// // #if defined(BCPA) || defined(RA) //|| defined(VNS)
-// //     SCIP_CALL( SCIPincludeHeurmyheuristic(scip) );
-// // #endif
-
-//     /* disable presolving */
-//     SCIP_CALL( SCIPsetPresolving(scip_b, SCIP_PARAMSETTING_OFF, TRUE) );
-
-//     SCIP_CALL( SCIPsetIntParam(scip_b, "propagating/maxrounds", 0) );
-//     SCIP_CALL( SCIPsetIntParam(scip_n, "propagating/maxroundsroot", 0) );
-
-//     SCIP_CALL( SCIPsetIntParam(scip_b, "presolving/maxrounds", 0) );
-//     SCIP_CALL( SCIPsetIntParam(scip_b, "separating/maxrounds", 0) );
-
-//     /* set time limit */
-//     SCIP_CALL( SCIPsetRealParam(scip_b, "limits/time", TIME_LIMIT) );
-
-
+//
+void configOutputName(char* name, char* probname, char* program)
+{
+  char* program_filename;
  
-//     assert(scip_b != NULL);
-
-//     /* create event handler if it does not exist yet */
-//     if(SCIPfindEventhdlr(scip_b, EVENTHDLR_NAME) == NULL)
-//     {
-//         SCIP_CALL(SCIPincludeEventhdlrBasic(scip_b, NULL, EVENTHDLR_NAME, EVENTHDLR_DESC, eventExecAddedVar, NULL));
-//     }
-
-//     /* create problem in scip_b and add non-NULL callbacks via setter functions */
-//     SCIP_CALL(SCIPcreateProbBasic(scip_b, probname));
-
-//     SCIP_CALL(SCIPsetProbDelorig(scip_b, probdelorigdssp));
-//     SCIP_CALL(SCIPsetProbTrans(scip_b, probtransdssp));
-//     SCIP_CALL(SCIPsetProbDeltrans(scip_b, probdeltransdssp));
-//     SCIP_CALL(SCIPsetProbInitsol(scip_b, probinitsoldssp));
-//     SCIP_CALL(SCIPsetProbExitsol(scip_b, probexitsoldssp));
-
-//     /* set objective sense */
-//     SCIP_CALL(SCIPsetObjsense(scip_b, SCIP_OBJSENSE_MINIMIZE));
-
-//     /* tell scip_b that the objective will be always integral */
-//     SCIP_CALL(SCIPsetObjIntegral(scip_b));
-
-//     /* Number of constraints */
-//     SCIP_CALL(SCIPallocBufferArray(scip_b, &conss_b, CONS_1 + CONS_2 + CONS_3 + CONS_4));
-
-//     /* Number of variables */
-//     SCIP_CALL(SCIPallocBufferArray(scip_b, &vars_b, VARS_X + VARS_Y + VARS_D));
-   
-        
-    
-//     /* (1) constraint - only one symbol is chosen */
-//     for (i = 0; i < CONS_1; i++) {
-//         SCIP_CALL(SCIPcreateConsBasicLinear (scip_b, &conss_b[i], "(1)", 0, NULL, NULL, (double) alpha_size - 1.0, (double) alpha_size - 1.0));
-//         SCIP_CALL(SCIPaddCons(scip_b, conss_b[i]));
-//     }
-
-//     /* (2) constraint - is sci's symbol matched? */
-//     ncons = i;
-//     for (; i < ncons + CONS_2; i++) {
-//         SCIP_CALL(SCIPcreateConsBasicLinear (scip_b, &conss_b[i], "(2)", 0, NULL, NULL, -SCIPinfinity(scip_b), (double) string_size)); // string_size faz o papel de M(no modelo)
-//         SCIP_CALL(SCIPaddCons(scip_b, conss_b[i]));
-//     }
-
-//     /* (3) constraint - is sfi's symbol matched? */
-//     ncons = i;
-//     for (; i < ncons + CONS_3; i++) {
-//         SCIP_CALL(SCIPcreateConsBasicLinear (scip_b, &conss_b[i], "(3)", 0, NULL, NULL,  0.0, SCIPinfinity(scip_b)));
-//         SCIP_CALL(SCIPaddCons(scip_b, conss_b[i]));
-//     }
-
-//     /* (4) cosntraint - disjunctive constraint */
-//     ncons = i;
-//     for (; i < ncons + CONS_4; i++) {
-//         SCIP_CALL(SCIPcreateConsBasicLinear (scip_b, &conss_b[i], "(4)", 0, NULL, NULL, 1.0, SCIPinfinity(scip_b)));
-//         SCIP_CALL(SCIPaddCons(scip_b, conss_b[i]));
-//     }
-    
-//     // /* (4) cosntraint - disjunctive constraint */
-//     // if (definedVarsSize > 0) {
-//     //     ncons = i;
-//     //     for (; i < ncons + CONS_5; i++) {
-//     //         SCIP_CALL(SCIPcreateConsBasicLinear (scip_b, &conss_b[i], "(5)", 0, NULL, NULL, 1.0, SCIPinfinity(scip_b)));
-//     //         SCIP_CALL(SCIPaddCons(scip_b, conss_b[i]));
-//     //     }
-//     // }
-
-//     nvars = 0;
-//     ncons = i;
-    
-//     //int bcpa = 0;
-
-//     /**
-//     * add variables xij
-//     */
-//     for(i = 0; i < string_size; i++) {
-//         for (j = 0; j < alpha_size; j++) {
-//             (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "x_%d_%c", i, symbol_value(alphabet, alpha_size, j));
-//             SCIPdebugMessage("create variable %s\n", name);
-
-//             /* create a basic variable object */
-//             SCIP_CALL(SCIPcreateVarBasic(scip_b, &var_b, name, 0.0, 1.0, 0.0, SCIP_VARTYPE_BINARY));
-//             assert(var_b != NULL);
-
-//             vars_b[nvars++] = var_b;
-
-//             /* add variable to the problem */
-//             SCIP_CALL(SCIPaddVar(scip_b, var_b));
-
-
-//             /* add variable to corresponding constraint */
-//             /* add variable to constraint (1) */
-//             SCIP_CALL(SCIPaddCoefLinear(scip_b, conss_b[ROWS_1(i)], var_b, 1.0));
-
-//             /* add variable to constraint (2) */
-//             for (k = 0; k < sc_size; k++) {
-//                 for (l = 0; l < sum_sc[k + 1] - sum_sc[k]; l++) {
-//                     if (j == value_symbol(alphabet, alpha_size, sc[k][l + i]))
-//                         SCIP_CALL(SCIPaddCoefLinear(scip_b, conss_b[ROWS_2(k, l)], var_b, 1.0));
-//                 }
-//             }
-
-            
-//             // if (arrayOfDefinedVars[i * alpha_size + j] != -1) {
-//             //     SCIP_CALL(SCIPaddCoefLinear(scip_b, conss_b[ROWS_5(bcpa)], var_b, 1.0));
-//             //     bcpa++;
-//             // }
-//         }
-//     }
-
-//     /**
-//     * add variables yij
-//     */
-//     for (i = 0; i < sc_size; i++) {
-//         for (j = 0; j < sum_sc[i + 1] - sum_sc[i]; j++) {
-//             (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "y_%d_%d", i, j);
-//             SCIPdebugMessage("create variable %s\n", name);
-            
-            
-            
-//             /* create a basic variable object */
-//             SCIP_CALL(SCIPcreateVarBasic(scip_b, &var_b, name, 0.0, 1.0, 0.0, SCIP_VARTYPE_BINARY));
-//             assert(var_b != NULL);
-
-//             vars_b[nvars++] = var_b;
-
-//             /* add variable to the problem */
-//             SCIP_CALL(SCIPaddVar(scip_b, var_b));
-
-//             /* add variable to corresponding constraint */
-//             /* add variable to constraint (2) */
-//             SCIP_CALL(SCIPaddCoefLinear(scip_b, conss_b[ROWS_2(i, j)], var_b, string_size));
-
-//             /* add variable to constraint (4) */
-//             SCIP_CALL(SCIPaddCoefLinear(scip_b, conss_b[ROWS_4(i)], var_b, 1.0));
-//         }
-//     }
-
-//     /**
-//     * add variable dc
-//     */
-//     (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "d_c");
-//     SCIPdebugMessage("create variable %s\n", name);
-
-//     /* create a basic variable object */
-// #ifdef FSP
-//     SCIP_CALL(SCIPcreateVarBasic(scip_b, &var_b, name, 0.0, 0.0, 1.0, SCIP_VARTYPE_INTEGER));
-// #else
-//     SCIP_CALL(SCIPcreateVarBasic(scip_b, &var_b, name, 0.0, (double) string_size, 1.0, SCIP_VARTYPE_INTEGER));
-// #endif
-    
-//     assert(var_b != NULL);
-
-//     vars_b[nvars++] = var_b;
-
-//     /* add variable to the problem */
-//     SCIP_CALL(SCIPaddVar(scip_b, var_b));
-
-//     /* add variable to corresponding constraint */
-//     /* add variable to constraint (2) */
-//     for (i = 0; i < sc_size; i++) {
-//         for (j = 0; j < sum_sc[i + 1] - sum_sc[i]; j++) {
-//             SCIP_CALL(SCIPaddCoefLinear(scip_b, conss_b[ROWS_2(i, j)], var_b, -1.0));
-//         }
-//     }
-
-//     /**
-//     * add variable df
-//     */
-//     (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "d_f");
-//     SCIPdebugMessage("create variable %s\n", name);
-
-//     /* create a basic variable object */
-// #ifdef CSP
-//     SCIP_CALL(SCIPcreateVarBasic(scip_b, &var_b, name, 0.0, 0.0, -1.0, SCIP_VARTYPE_INTEGER));
-// #else
-//     SCIP_CALL(SCIPcreateVarBasic(scip_b, &var_b, name, (double) 0.0, (double) string_size, -1.0, SCIP_VARTYPE_INTEGER));
-// #endif
-//     assert(var_b != NULL);
-
-//     vars_b[nvars++] = var_b;
-
-//     /* add variable to the problem */
-//     SCIP_CALL(SCIPaddVar(scip_b, var_b));
-
-//     /* add variable to corresponding constraint */
-//     /* add variable to constraint (3) */
-//     for (i = 0; i < sf_size; i++) {
-//         for (j = 0; j < sum_sf[i + 1] - sum_sf[i]; j++) {
-//             SCIP_CALL(SCIPaddCoefLinear(scip_b, conss_b[ROWS_3(i, j)], var_b, -1.0));
-//         }
-//     }
-
-//     /* create problem data */
-//     SCIP_CALL(probdataCreate(scip_b, &probdata, vars_b, conss_b, nvars, ncons, sc_size, sf_size, alpha_size, string_size, string_size, 0, sc, sf, sum_sc, sum_sf, alphabet, probname));
-
-//     SCIP_CALL(SCIPwriteOrigProblem(scip_b, "dssp.lp", "lp", FALSE)); /* grava na saida padrao ou em file */
-
-//     /* set user problem data */
-//     SCIP_CALL(SCIPsetProbData(scip_b, probdata));
-
-//     // /* free local buffer arrays */
-//     // SCIPfreeBufferArray(scip_b, &conss_b);
-//     // SCIPfreeBufferArray(scip_b, &vars_b);
-
-
-//     return bcpa;
-
-
-    
-// }
-double heur_BCPA(SCIP* scip_o, char *filename) {
-    SCIP* scip;
-    char name[SCIP_MAXSTRLEN];
-    printf("BCPA\n");
-    SCIP_CALL( SCIPcreate(&scip) );
-    SCIP_CALL( SCIPincludeDefaultPlugins(scip) );
-    #ifdef ROUNDING
-    SCIP_CALL( SCIPsetRealParam(scip, "limits/time", TIME_LIMIT) );
-    #else
-    SCIP_CALL( SCIPsetRealParam(scip, "limits/time", 900) );
-    #endif
-    SCIPinfoMessage(scip, NULL, "\n");
-    SCIPinfoMessage(scip, NULL, "************************************************\n");
-    SCIPinfoMessage(scip, NULL, "* Running BCPA *\n");
-    SCIPinfoMessage(scip, NULL, "************************************************\n");
-    SCIPinfoMessage(scip, NULL, "\n");
- 
-    SCIP_CALL( setupProblem(scip, scip_o) );
- 
-    SCIPinfoMessage(scip, NULL, "Original problem:\n");
-    SCIP_CALL( SCIPprintOrigProblem(scip, NULL, "cip", FALSE) );
- 
-    SCIPinfoMessage(scip, NULL, "\n");
-    SCIP_CALL( SCIPpresolve(scip) );
- 
-    /* SCIPinfoMessage(scip, NULL, "Reformulated problem:\n");
-    SCIP_CALL( SCIPprintTransProblem(scip, NULL, "cip", FALSE) );
-    */
- 
-    SCIPinfoMessage(scip, NULL, "\nSolving...\n");
-    SCIP_CALL( SCIPsolve(scip) );
- 
-    if( SCIPgetNSols(scip) > 0 )
-    {
-       SCIPinfoMessage(scip, NULL, "\nSolution:\n");
-       SCIP_CALL( SCIPprintSol(scip, SCIPgetBestSol(scip), NULL, FALSE) );
-
-       return SCIPgetPrimalbound(scip);
-    } else {
-        printf("NO SOLUTIONS\n");
-    }
-
-
- 
-    // SCIP_CALL( SCIPfree(&scip) );
- 
-    return SCIP_OKAY;
-}
-/** sets up problem */
- 
- SCIP_RETCODE setupProblem(
-    SCIP*                 scip                /**< SCIP data structure */,
-    SCIP*                 scip_o                /**< SCIP data structure */
-    )
- {
-    printf("Setup Problem\n");
-    char name[SCIP_MAXSTRLEN];
-    int i, j, k, l;
-    SCIP_CONS** conss;
-    SCIP_VAR** vars, *var;
-
-
-
-    int string_size, alpha_size, nvars, ncons;
-    char *alphabet;
-    double t, t_max, t_melhor;
-    char **sc, **sf;
-    int sc_size, sf_size = 0;
-    int kc, kf = 0;
-    int  *sum_sc, *sum_sf;
-    int dc, df;
-
-    SCIP_SOL *bestSolution;
-    SCIP_PROBDATA *probdata;
-    SCIP_VAR **vars_o, *var_o;
-    SCIP_Real solval;
-
-    FILE *file;
-    clock_t antes, agora;
-
-    antes = clock();
-    
-    assert(scip_o != NULL);
-
-    bestSolution = SCIPgetBestSol(scip_o);
-  
-    probdata = SCIPgetProbData(scip_o);
-    assert(probdata != NULL);
-
-    // nvars = SCIPprobdataGetNVars(probdata);
-    vars_o = SCIPprobdataGetVars(probdata);
-    string_size = SCIPprobdataGetString_size(probdata);
-    alphabet = SCIPprobdataGetAlphabet(probdata);
-    alpha_size = SCIPprobdataGetAlpha_size(probdata);
-    sc = SCIPprobdataGetSc(probdata);
-    sf = SCIPprobdataGetSf(probdata);
-    sc_size = SCIPprobdataGetSc_size(probdata);
-    sf_size = SCIPprobdataGetSf_size(probdata);
-    kc = SCIPprobdataGetKc(probdata);
-    kf = SCIPprobdataGetKf(probdata); 
-    sum_sc = SCIPprobdataGetSum_sc(probdata);
-    sum_sf = SCIPprobdataGetSum_sf(probdata);
-
-    SCIP_CALL( SCIPcreateProbBasic(scip, "BCPA") );
-    
-
-    /* set objective sense */
-    SCIP_CALL(SCIPsetObjsense(scip, SCIP_OBJSENSE_MINIMIZE));
-
-    /* tell SCIP that the objective will be always integral */
-    SCIP_CALL(SCIPsetObjIntegral(scip));
-
-    /* Number of constraints */
-    // SCIP_CALL(SCIPallocBufferArray(scip, &conss, CONS_1 + CONS_2 + CONS_3 + CONS_4));
-    /* Number of constraints */
-    SCIP_CALL(SCIPallocBufferArray(scip, &conss, CONS_1 + CONS_2 + CONS_3 + CONS_4));
-
-    /* Number of variables */
-    // SCIP_CALL(SCIPallocBufferArray(scip, &vars, VARS_X + VARS_Y + VARS_D));
-    //SCIP_CALL(SCIPallocBufferArray(scip, &vars, VARS_X + VARS_Y + VARS_D));
-    SCIP_CALL(SCIPallocBufferArray(scip, &vars, VARS_X + VARS_Y + VARS_D ));
-
-    /* (1) constraint - only one symbol is chosen */
-    for (i = 0; i < CONS_1; i++) {
-        SCIP_CALL(SCIPcreateConsBasicLinear (scip, &conss[i], "(1)", 0, NULL, NULL, (double) alpha_size - 1.0, (double) alpha_size - 1.0));
-        SCIP_CALL(SCIPaddCons(scip, conss[i]));
-    }
-
-    /* (2) constraint - is sci's symbol matched? */
-    ncons = i;
-    for (; i < ncons + CONS_2; i++) {
-        SCIP_CALL(SCIPcreateConsBasicLinear (scip, &conss[i], "(2)", 0, NULL, NULL, -SCIPinfinity(scip), (double) string_size)); // string_size faz o papel de M(no modelo)
-        SCIP_CALL(SCIPaddCons(scip, conss[i]));
-    }
-
-    /* (3) constraint - is sfi's symbol matched? */
-    ncons = i;
-    for (; i < ncons + CONS_3; i++) {
-        SCIP_CALL(SCIPcreateConsBasicLinear (scip, &conss[i], "(3)", 0, NULL, NULL,  0.0, SCIPinfinity(scip)));
-        SCIP_CALL(SCIPaddCons(scip, conss[i]));
-    }
-
-    /* (4) cosntraint - disjunctive constraint */
-    ncons = i;
-    for (; i < ncons + CONS_4; i++) {
-        SCIP_CALL(SCIPcreateConsBasicLinear (scip, &conss[i], "(4)", 0, NULL, NULL, 1.0, SCIPinfinity(scip)));
-        SCIP_CALL(SCIPaddCons(scip, conss[i]));
-    }
-   
-    nvars = 0;
-    ncons = i;
-
-     for(i = 0; i < string_size; i++) {
-        for (j = 0; j < alpha_size; j++) {
-            (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "x_%d_%c", i, symbol_value(alphabet, alpha_size, j));
-            SCIPdebugMessage("create variable %s\n", name);
-
-            /* create a basic variable object */
-           
-            
-
-            SCIP_Real solval = SCIPgetSolVal(scip_o, bestSolution, vars_o[nvars]); // guardar numa variavel
-                    
-            if (solval > 0.999999) { 
-                SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 1.0, 1.0, 0.0, SCIP_VARTYPE_BINARY));
-            } else if (solval < 0.000001) {
-                SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 0.0, 0.0, SCIP_VARTYPE_BINARY));
-            } else {
-                SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 1.0, 0.0, SCIP_VARTYPE_BINARY));
-            }
-
-            assert(var != NULL);
-
-            vars[nvars++] = var;
-
-            /* add variable to the problem */
-            SCIP_CALL(SCIPaddVar(scip, var));
-
-
-            /* add variable to corresponding constraint */
-            /* add variable to constraint (1) */
-            SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_1(i)], var, 1.0));
-
-            /* add variable to constraint (2) */
-            for (k = 0; k < sc_size; k++) {
-                for (l = 0; l < sum_sc[k + 1] - sum_sc[k]; l++) {
-                    if (j == value_symbol(alphabet, alpha_size, sc[k][l + i]))
-                        SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_2(k, l)], var, 1.0));
-                }
-            }
-
-            /* add variable to constraint (3) */
-            for (k = 0; k < sf_size; k++) {
-                for (l = 0; l < sum_sf[k + 1] - sum_sf[k]; l++) {
-                    if (j == value_symbol(alphabet, alpha_size, sf[k][l + i]))
-                        SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_3(k, l)], var, 1.0));
-                }
-            }
-            
-            // if (arrayOfDefinedVars[i * alpha_size + j] != -1) {
-            //     SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_5(bcpa)], var, 1.0));
-            //     bcpa++;
-            // }
-        }
-    }
-
-     /**
-    * add variables yij
-    */
-    for (i = 0; i < sc_size; i++) {
-        for (j = 0; j < sum_sc[i + 1] - sum_sc[i]; j++) {
-            (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "y_%d_%d", i, j);
-            SCIPdebugMessage("create variable %s\n", name);
-            
-            
-            
-            /* create a basic variable object */
-            SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 1.0, 0.0, SCIP_VARTYPE_BINARY));
-            assert(var != NULL);
-
-            vars[nvars++] = var;
-
-            /* add variable to the problem */
-            SCIP_CALL(SCIPaddVar(scip, var));
-
-            /* add variable to corresponding constraint */
-            /* add variable to constraint (2) */
-            SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_2(i, j)], var, string_size));
-
-            /* add variable to constraint (4) */
-            SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_4(i)], var, 1.0));
-        }
-    }
-
-    /**
-    * add variable dc
-    */
-    (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "d_c");
-    SCIPdebugMessage("create variable %s\n", name);
-
-
-    SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, (double) kc, 1.0, SCIP_VARTYPE_INTEGER));
-    
-    assert(var != NULL);
-
-    vars[nvars++] = var;
-
-    /* add variable to the problem */
-    SCIP_CALL(SCIPaddVar(scip, var));
-
-    /* add variable to corresponding constraint */
-    /* add variable to constraint (2) */
-    for (i = 0; i < sc_size; i++) {
-        for (j = 0; j < sum_sc[i + 1] - sum_sc[i]; j++) {
-            SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_2(i, j)], var, -1.0));
-        }
-    }
-
-    SCIPfreeBufferArray(scip, &conss);
-    SCIPfreeBufferArray(scip, &vars);
-
-    return SCIP_OKAY;
+ // remove path, if there exists on program name
+ program_filename = strrchr(program, '/');
+ if(program_filename==NULL){
+   program_filename = program;
+ }
+ else{
+   program_filename++; // discard /
  }
 
-double heur_RA(SCIP* scip, char *filename)
-{
-    int i, j, k, l, string_size, alpha_size, *heur;
-    double ra;
-    char name[SCIP_MAXSTRLEN], *alphabet;
-    FILE *file;
-    int         sc_size;
-    int*        sum_sc;
-
-    SCIP_SOL *bestSolution;
-    SCIP_PROBDATA *probdata;
-    SCIP_VAR **vars, *var;
-    SCIP_Real solval;
-
-    assert(scip != NULL);
-    
-    bestSolution = SCIPgetBestSol(scip);
-  
-    probdata = SCIPgetProbData(scip);
-    assert(probdata != NULL);
-
-    // nvars = SCIPprobdataGetNVars(probdata);
-    vars = SCIPprobdataGetVars(probdata);
-    string_size = SCIPprobdataGetString_size(probdata);
-    alphabet = SCIPprobdataGetAlphabet(probdata);
-    alpha_size = SCIPprobdataGetAlpha_size(probdata);
-    sc_size = SCIPprobdataGetSc_size(probdata) == 0 ? SCIPprobdataGetSf_size(probdata) : SCIPprobdataGetSc_size(probdata);
-    sum_sc = SCIPprobdataGetSum_sc(probdata);
-
-#ifndef NOVO    
-    (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "%s-antigo", filename);
-#else
-    (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "%s-novo", filename);
-#endif
-#ifdef SUB
-    strcat(name, "-SUB");
-#else
-    strcat(name, "-STRING");
-#endif
-
-#ifdef CSP
-    strcat(name, "-CSP");
-#elif FSP
-    strcat(name, "-FSP");
-#else
-    strcat(name, "-DSP");
-#endif
-
-    strcat(name, "-RA-F.sol");
-    file = fopen(name, "w");
-
-    if(!file)
-    {
-        //printf("\nProblem to create solution file: %s", name);
-        return SCIP_INVALID;
-    }
-    
-
-    heur = (int *)malloc(sizeof(int) * string_size);
-#ifdef NOVO
-    double *guarda_maior; int change=0, ind;
-    guarda_maior = malloc (string_size * sizeof (double));
-    for(i=0;i<string_size;i++)guarda_maior[i]=-1.0;
-    for(i=0;i<string_size;i++)heur[i]=0;
-
-    int kcounter = 0, kpos = 0;
-    //printf("REG2\n"); fflush(stdout);
-#ifdef MERGE    
-    /**
-    Encontra o Melhor alinhamento em cada String em SC
-    Para estes alinhamentos, encontra a variável de melhor valor em cada posição para computar 
-    o alinhamento final
-    */
-
-    // printf("\nMERGE %d\n", sc_size); 
-
-    double menor = 2;
-    int melhor_posicao, jj;
-
-    int *melhor_alinhamento = (int*)malloc(sizeof(int)*sc_size);
-    double *melhor_alinhamento_valor = (double*)malloc(sizeof(double)*string_size);
-    kcounter = 0;
-    double menor_soma = 0, soma=0;;
-    
-    for (i = 0; i < sc_size; i ++) {
-      menor_soma = 0;//2*string_size;
-	//        printf("%I: %d\n", i);fflush(stdout);
-        for (j = 0; j < string_size; j ++) {
-            soma = 0;
-            for (k = 0; k < sum_sc[i+1] - sum_sc[i]; k++) {
-	      menor = 0; //2;
-                for (l = 0; l < alpha_size; l++) {
-                    var = vars[kcounter++];
-		    if(j+k > (3/4.0)*string_size){
-		      continue;
-		    }
-                    solval = SCIPgetSolVal(scip, bestSolution, var); // guardar numa variavel
-                    
-		    //                    printf("%lf\n", solval);fflush(stdout);
-
-                    if (solval > menor + 0.00001) { //< menor) {
-                        // printf("MAIOR %d %.2lf\n", l, solval); fflush(stdout);
-                        melhor_posicao = j;
-                        menor = solval;
-                        ind = kcounter;
-                    }
-                }
-                soma += menor;
-            }
-            if (soma > menor_soma + 0.00001) {
-                menor_soma = soma; 
-                melhor_alinhamento[i] = j;
-		//printf("\nMelhor soma da string %d eh na posicao %d com valor %lf", i, melhor_alinhamento[i], menor_soma);
-            }
-        }
-    }
-
-
-    for (i = 0; i < sc_size; i ++) //printf("%d ", melhor_alinhamento[i]);
-
-    for (i = 0; i < string_size; i ++ ) melhor_alinhamento_valor[i] = 0;//2;
-
-    kcounter=0;
-    for (i = 0; i < sc_size; i ++) {
-        for (j = 0; j < string_size; j ++) {
-            for (k = 0; k < sum_sc[i+1] - sum_sc[i]; k++) {
-	      menor = 0;//2;
-                for (l = 0; l < alpha_size; l++) {
-                    var = vars[kcounter++];
-                    solval = SCIPgetSolVal(scip, bestSolution, var); // guardar numa variavel
-
-                    if (solval > menor) {
-                        // printf("MAIOR %d %.2lf\n", l, solval); fflush(stdout);
-                        menor=solval;
-                        ind = l;
-                    }
-                }
-
-                if (j == melhor_alinhamento[i]) {
-                    if (menor > melhor_alinhamento_valor[j]) {
-                        heur[j] = l;
-                        melhor_alinhamento_valor[j] = menor;
-                    }
-                }
-            }
-            
-        }
-    }
-    // printf("\n"); 
-
-    free(melhor_alinhamento);
-
-#elif REDUCE
-    /**
-    Ordena as variáveis
-    Seleciona a de melhor valor
-    Torna 1 as variáveis que se tornam inviáveis quando a variável acima é escolhida
-    */
-
-    double menor = 2;
-    int melhor_posicao, jj;
-
-    int *melhor_alinhamento = (int*)malloc(sizeof(int)*sc_size);
-    kcounter = 0;
-    int menor_soma = 0;
-
-    double *solutions, *positions;
-     
-    for (count = 0; count < string_size; count +=1) {
-        for (i = 0; i < sc_size; i ++) {
-            for (j = 0; j < string_size; j ++) {
-                for (k = 0; k < sum_sc[i+1] - sum_sc[i]; k++) {
-                    menor = 2;
-                    for (l = 0; l < alpha_size; l++) {
-                        var = vars[kcounter++];
-                        solval = SCIPgetSolVal(scip, bestSolution, var);
-
-                        if (solval < menor) {
-                            
-                            melhor_posicao = j;
-                            maior=solval;
-                            ind = l;
-                        }
-                    }
-
-                    
-                }
-            }
-        }
-
-
-    }
-  
-#else
-
-    int melhor_posicao, jj;
-
-    int *melhor_alinhamento_valor = (double*)malloc(sizeof(double)*string_size);
-
-    for (i = 0; i < string_size; i ++) melhor_alinhamento_valor[i] = 2;
-    kcounter = 0;
-    int menor_soma = 0; 
-    double menor;
-    for (i = 0; i < sc_size; i ++) {
-        for (j = 0; j < string_size; j ++) {
-            for (k = 0; k < sum_sc[i+1] - sum_sc[i]; k++) {
-                menor = 2;
-                for (l = 0; l < alpha_size; l++) {
-                    var = vars[kcounter++];
-                    solval = SCIPgetSolVal(scip, bestSolution, var); // guardar numa variavel
-
-                    if (solval < menor) {
-                        // printf("MAIOR %d %.2lf\n", l, solval); fflush(stdout);
-                        melhor_posicao = j;
-                        menor=solval;
-                        ind = l;
-                    }
-                }
-
-                if (menor < melhor_alinhamento_valor[j]) {
-                    heur[j] = l;
-                    melhor_alinhamento_valor[j] = menor;
-                }
-            }
-        }
-    }
-  
-    
-#endif
-    
-    
-#else
-    for(i = 0; i < string_size; i++) {
-        double menor = 2.0;
-        int ind = -1;
-        for (j = 0; j < alpha_size; j++) {
-            var = vars[i * alpha_size + j];
-            solval = SCIPgetSolVal(scip, bestSolution, var);
-            //fprintf(file, "%.2lf ", solval);
-            if (solval < menor) {
-                menor = solval;
-                ind = j;
-            }
-        }
-        heur[i] = ind;
-    }
-#endif
-
-    // for (i = 0; i < string_size; i ++) {
-    //     printf("%d ", heur[i]); fflush(stdout);
-    // } printf("\n");
-
-    ra = valorSolucao(scip, filename, heur);
-    fprintf(file, "Objective Value(dc - df) = %d\n", ra);
-    fprintf(file, "Palavra(x) = ");
-    
-    for(i = 0; i < string_size; i++) {
-       fprintf(file, "%c", symbol_value(alphabet, alpha_size, heur[i]));
-    }
-    fprintf(file, "\n");        
-    
-    fprintf(file, "# ");        
-    for (j = 0; j < alpha_size; j++) {
-            fprintf(file, "%c ", symbol_value(alphabet, alpha_size, j));
-        }
-    fprintf(file, "\n");
-    for(i = 0; i < string_size; i++) {
-        fprintf(file, "%d ", i);
-        for (j = 0; j < alpha_size; j++) {
-            if (heur[i] != j) {
-                fprintf(file, "0 ");
-            } else {
-                fprintf(file, "1 ");
-            }
-        }
-        fprintf(file, "\n");        
-    }
-    //printf("#3\n"); fflush(stdout);
-    fclose(file);
-
-    return ra;
-
-}
-
-void printRelaxedSol(SCIP* scip, char *filename, double tempo)
-{
-    int i, j, string_size, alpha_size, *sum_sc, nvars;
-    char name[SCIP_MAXSTRLEN], *alphabet;
-    FILE *file;
-    
-    SCIP_PROBDATA *probdata;
-    SCIP_VAR **vars, *var;
-    SCIP_Real solval;
-    int totalFrac, desl, sc_size, *v, kcounter, k, l;
-    
-    assert(scip != NULL);
-       
-    probdata = SCIPgetProbData(scip);
-    assert(probdata != NULL);
-    
-    nvars = SCIPprobdataGetNVars(probdata);
-    vars = SCIPprobdataGetVars(probdata);
-    string_size = SCIPprobdataGetString_size(probdata);
-    alphabet = SCIPprobdataGetAlphabet(probdata);
-    alpha_size = SCIPprobdataGetAlpha_size(probdata);
-    sum_sc = SCIPprobdataGetSum_sc(probdata);
-    sc_size = SCIPprobdataGetSc_size(probdata);
-    
-
-
-#ifndef NOVO    
-    (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "%s-ANTIGO", filename);
-#else
-    (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "%s-NOVO", filename);
-#endif
-#ifdef GLOBAL
-    strcat(name, "-GLOBAL");
-#else
-    strcat(name, "-ONLYROOT");
-#endif
-#ifdef SUB
-    strcat(name, "-SUB");
-#else
-    strcat(name, "-STRING");
-#endif
-
-#ifdef CSP
-    strcat(name, "-CSP");
-#elif FSP
-    strcat(name, "-FSP");
-#else
-    strcat(name, "-DSP");
-#endif
-
-#ifdef NONE
-    strcat(name, "-NONE");
-#elif RA
-    strcat(name, "-RA");
-#elif BCPA
-    strcat(name, "-BCPA");
-#elif VNS
-    strcat(name, "-VNS");
-#endif
-
-#ifdef VBPL
-    strcat(name, "-VBPL");
-#elif BLPL
-    strcat(name, "-BLPL");
-#else
-    strcat(name, "-PBPL");
-#endif
-
-#ifdef TIMESSS
-    strcat(name, "-5S");
-#elif TIMESS
-    strcat(name, "-30S");
-#elif TIMES
-    strcat(name, "-60S");
-#elif TIMEM
-    strcat(name, "-120S");
-#elif TIMEL
-    strcat(name, "-180S");
-#elif TIMELL
-    strcat(name, "-300S");
-#endif
-
-#ifdef NSIZES
-    strcat(name, "-SIZE2");
-#elif NSIZEM
-    strcat(name, "-SIZE3");
-#elif NSIZEL
-    strcat(name, "-SIZE4");
-#else
-    strcat(name, "-SIZE4");
-#endif
-
-#ifdef BEST
-    strcat(name, "-BEST");
-#elif FIRST
-    strcat(name, "-FIRST");
-#endif
-
-
-#ifdef OMEGAS
-    strcat(name, "-OMEGAS");
-#elif OMEGAM
-    strcat(name, "-OMEGAM");
-#else
-    strcat(name, "-OMEGAL");
-#endif
-
-    strcat(name, ".sol");
-    file = fopen(name, "w");
-    
-    if(!file)
-    {
-        //printf("\nProblem to create solution file: %s", name);
-        return;
-    }
-    
-    name[0] = '\0';
-    
-    fprintf(file, "Tempo: %lfs\n", tempo);
-        fprintf(file, "Objective Value(dc - df) = %lf\n", SCIPgetPrimalbound(scip));
-    
-    fprintf(file, "Palavra(x) = ");
-    for(i = 0; i < string_size; i++) {
-      desl=0;
-        for (j = 0; j < alpha_size; j++) {
-            var = vars[i * alpha_size + j];
-	    solval = SCIPgetVarSol(scip,var);
-            if(SCIPisFeasIntegral(scip, solval) && solval < 0.00001)
-            {
-                fprintf(file, "%c", symbol_value(alphabet, alpha_size, j));
-		desl=1;
-            }
-        }
-	if(desl==0){
-	  fprintf(file, "@");
-	}
-	
-    }
-   
-    fprintf(file, "\n");
-    
-    /* dc */
-    var = vars[nvars - 2];
-    solval = SCIPgetVarSol(scip,var);
-    fprintf(file, "dc = %.0lf\n", solval);
-    
-    var = vars[nvars - 1];
-    solval = SCIPgetVarSol(scip,var);
-    fprintf(file, "df = %.0lf\n", solval);
-
-    v=(int*)malloc(sizeof(int)*nvars);
-    for(i=0;i<nvars;i++){
-      v[i]=0;
-    }
-    totalFrac=0;    
-
-#ifdef NOVO
-    fprintf(file, "Var fracionarias = ");
-    for (i = 0, kcounter = 0; i < sc_size; i ++) { //printf("F1\n"); fflush(stdout);
-	 for (j = 0; j < string_size; j ++) { //printf("   F2\n"); fflush(stdout);
-	    for (k = 0; k < sum_sc[i+1] - sum_sc[i]; k++) {  //printf("      F3\n"); fflush(stdout);
-	      for (l = 0; l < alpha_size; l++) { //printf("         F4\n"); fflush(stdout);
-                var = vars[kcounter++];
-                solval = SCIPgetVarSol(scip, var); 
-		if(!SCIPisFeasIntegral(scip, solval)){
-		  fprintf(file, "\nx_%d_%d_%c_%d=%lf", i,j+k,symbol_value(alphabet, alpha_size, l),j, solval);
-		}
-	      }	
-            }                    
-	 }
-    }
-
-    fprintf(file, "Var inteiras 1.0 = ");
-    for (i = 0, kcounter = 0; i < sc_size; i ++) { //printf("F1\n"); fflush(stdout);
-	 for (j = 0; j < string_size; j ++) { //printf("   F2\n"); fflush(stdout);
-	    for (k = 0; k < sum_sc[i+1] - sum_sc[i]; k++) {  //printf("      F3\n"); fflush(stdout);
-	      for (l = 0; l < alpha_size; l++) { //printf("         F4\n"); fflush(stdout);
-                var = vars[kcounter++];
-                solval = SCIPgetVarSol(scip, var); 
-		if(SCIPisFeasIntegral(scip, solval) && solval >= 1.0 - 0.00001){
-		  fprintf(file, "\nx_%d_%d_%c_%d=%lf", i,j+k,symbol_value(alphabet, alpha_size, l),j, solval);
-		}
-	      }	
-            }                    
-	 }
-    }    
-    
-#else  
-    fprintf(file, "Var fracionarias = ");
-    for(i = 0; i < string_size; i++) {
-        for (j = 0; j < alpha_size; j++) {
-            var = vars[i * alpha_size + j];
-	    solval = SCIPgetVarSol(scip,var);
-	    if(!SCIPisFeasIntegral(scip, solval))
-	      {
-		fprintf(file, "\nx_%d_%c=%lf", i,symbol_value(alphabet, alpha_size, j), solval);
-	      }
-        }
-    }
-
-
-    fprintf(file, "Var inteiras 0.0 = ");
-    for(i = 0; i < string_size; i++) {
-        for (j = 0; j < alpha_size; j++) {
-            var = vars[i * alpha_size + j];
-	    solval = SCIPgetVarSol(scip,var);
-	    if(SCIPisFeasIntegral(scip, solval) && solval <= 0.00001)
-	      {
-		fprintf(file, "\nx_%d_%c=%lf", i,symbol_value(alphabet, alpha_size, j), solval);
-	      }
-        }
-    }
-
-    fprintf(file, "Var fracionarias = ");
-    for(i = 0; i < sc_size; i++) {
-        for (j = 0; j < sum_sc[i + 1] - sum_sc[i]; j++) {
-            var = vars[VARS_X + sum_sc[i] + j];
-	    solval = SCIPgetVarSol(scip,var);
-	    if(!SCIPisFeasIntegral(scip, solval))
-	      {
-		fprintf(file, "\ny_%d_%d=%lf", i, j, solval);
-	      }
-        }
-    }
-    fprintf(file, "Var inteiras 1.0 = ");
-    for(i = 0; i < sc_size; i++) {
-        for (j = 0; j < sum_sc[i + 1] - sum_sc[i]; j++) {
-            var = vars[VARS_X + sum_sc[i] + j];
-	    solval = SCIPgetVarSol(scip,var);
-	    if(SCIPisFeasIntegral(scip, solval) && solval >= 1.0 - 0.00001)
-	      {
-		fprintf(file, "\ny_%d_%d=%lf", i, j, solval);
-	      }
-        }
-    }
-#endif
-    
-
-    totalFrac=0;int totalNFRAC=0;
-    for(i=0;i<nvars; i++){
-      solval = SCIPgetVarSol(scip,vars[i]);
-      if(!SCIPisFeasIntegral(scip, solval))
-	{
-	  totalFrac++;
-	}else totalNFRAC +=1;
-    }
-
-    fprintf(file, "\nTotal fracionarias=%d\n", totalFrac);
-    fclose(file);
-
-    printf(";%d;%d;", totalFrac, totalNFRAC);
-    free(v);
+ (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "%s/%s-%s", output_path, instance_filename, program_filename);
+ // append parameter stamp
+ strcat(name, "-");
+ strcat(name, param.parameter_stamp);
 }
 
 /** print best primal solution in file with extension ".sol"
@@ -1273,90 +156,8 @@ void printSol(SCIP* scip, char *filename, double tempo)
     sum_sc = SCIPprobdataGetSum_sc(probdata);
     sc_size = SCIPprobdataGetSc_size(probdata);
 
-
-#ifndef NOVO    
-    (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "%s-ANTIGO", filename);
-#else
-    (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "%s-NOVO", filename);
-#endif
-#ifdef GLOBAL
-    strcat(name, "-GLOBAL");
-#else
-    strcat(name, "-ONLYROOT");
-#endif
-#ifdef SUB
-    strcat(name, "-SUB");
-#else
-    strcat(name, "-STRING");
-#endif
-
-#ifdef CSP
-    strcat(name, "-CSP");
-#elif FSP
-    strcat(name, "-FSP");
-#else
-    strcat(name, "-DSP");
-#endif
-
-#ifdef NONE
-    strcat(name, "-NONE");
-#elif RA
-    strcat(name, "-RA");
-#elif BCPA
-    strcat(name, "-BCPA");
-#elif VNS
-    strcat(name, "-VNS");
-#endif
-
-#ifdef VBPL
-    strcat(name, "-VBPL");
-#elif BLPL
-    strcat(name, "-BLPL");
-#else
-    strcat(name, "-PBPL");
-#endif
-
-#ifdef TIMESSS
-    strcat(name, "-5S");
-#elif TIMESS
-    strcat(name, "-30S");
-#elif TIMES
-    strcat(name, "-60S");
-#elif TIMEM
-    strcat(name, "-120S");
-#elif TIMEL
-    strcat(name, "-180S");
-#elif TIMELL
-    strcat(name, "-300S");
-#else
-    strcat(name, "-3000S");
-#endif
-
-#ifdef NSIZES
-    strcat(name, "-SIZE2");
-#elif NSIZEM
-    strcat(name, "-SIZE3");
-#elif NSIZEL
-    strcat(name, "-SIZE4");
-#else
-    strcat(name, "-SIZE4");
-#endif
-
-#ifdef BEST
-    strcat(name, "-BEST");
-#elif FIRST
-    strcat(name, "-FIRST");
-#endif
-
-
-#ifdef OMEGAS
-    strcat(name, "-OMEGAS");
-#elif OMEGAM
-    strcat(name, "-OMEGAM");
-#else
-    strcat(name, "-OMEGAL");
-#endif
-    strcat(name, ".sol");
+    strcpy(name, filename);
+    strcat(name, ".lp.sol");
 
     file = fopen(name, "w");
     
@@ -1368,18 +169,21 @@ void printSol(SCIP* scip, char *filename, double tempo)
 
     name[0] = '\0';
 
-    fprintf(file, "Tempo: %lfs\n", tempo);
+    fprintf(file, "Time: %lfs\n", tempo);
     fprintf(file, "Objective Value(dc - df) = %.0lf\n", SCIPgetPrimalbound(scip)); //SCIPsolGetOrigObj(bestSolution));
-    fprintf(file, "Palavra(x) = ");
+    fprintf(file, "Target String(x) = ");
 
     for(i = 0; i < string_size; i++) {
         for (j = 0; j < alpha_size; j++) {
             var = vars[i * alpha_size + j];
             solval = SCIPgetSolVal(scip, bestSolution, var);
-            if(solval == 0.0)
+            if(solval < EPSILON)
             {
                 fprintf(file, "%c", symbol_value(alphabet, alpha_size, j));
             }
+            //            else{
+            //                fprintf(file, "-");
+            //            }
         }
     }
     fprintf(file, "\n");
@@ -1413,1585 +217,513 @@ void printSol(SCIP* scip, char *filename, double tempo)
         fprintf(file, "\n");
     }
 
+    printCompilerSettings(file);
     fclose(file);
 }
-
-void validSol(SCIP *scip, char *filename) {
-    int i, j, k, l, sum;
-    int **x, **y, dc, df, *sum_sc, *sum_sf, string_size, alpha_size, sc_size, sf_size;
-    char name[SCIP_MAXSTRLEN], **sc, **sf, *alphabet;
-    char sol_x[999], aux[2];
-    bool valid = true;
-    FILE *file;
-    FILE *input;
-
-    SCIP_SOL *bestSolution;
-    SCIP_PROBDATA *probdata;
-    SCIP_VAR **vars, *var;
-    SCIP_Real solval;
-
-    assert(scip != NULL);
-    
-    bestSolution = SCIPgetBestSol(scip);
-    if(bestSolution == NULL){
-        return;
-    }
-    
-    probdata = SCIPgetProbData(scip);
-    assert(probdata != NULL);
-#ifndef NOVO
-    (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "%s-antigo.debug", filename);
-#else
-    (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "%s-antigo.debug", filename);
-#endif
-    file = fopen(name, "w");
-    fprintf(file, "Validacao...\n");
-    vars = SCIPprobdataGetVars(probdata);
-    string_size = SCIPprobdataGetString_size(probdata);
-    alphabet = SCIPprobdataGetAlphabet(probdata);
-    alpha_size = SCIPprobdataGetAlpha_size(probdata);
-    sc = SCIPprobdataGetSc(probdata);
-    sf = SCIPprobdataGetSf(probdata);
-    sum_sc = SCIPprobdataGetSum_sc(probdata);
-    sum_sf = SCIPprobdataGetSum_sf(probdata);
-    sc_size = SCIPprobdataGetSc_size(probdata);
-    sf_size = SCIPprobdataGetSf_size(probdata);
-    
-    x = (int **) calloc(string_size, sizeof(int *));
-    for (i = 0; i < string_size; i++) {
-        x[i] = (int *) calloc(alpha_size, sizeof(int));
-    }
-
-    y = (int **) calloc(sc_size, sizeof(int *));
-    for (i = 0; i < sc_size; i++) {
-        y[i] = (int *) calloc(sum_sc[i], sizeof(int));
-    }
-    
-    
-    
-    for(i = 0; i < string_size; i++) {
-        sum = 0;
-        for (j = 0; j < alpha_size; j++) {
-            var = vars[i * alpha_size + j];
-            solval = SCIPgetSolVal(scip, bestSolution, var);
-            x[i][j] = (int) solval;
-            sum += x[i][j];
-        }
-        if (sum != alpha_size - 1) {
-            fprintf(file, "Problema na restricao (1) na posicao %d da string x.\n", i);
-            valid = false;
-        }
-    }
-
-    for (i = 0; i < sc_size; i++) {
-        for (k = 0; k < sum_sc[i + 1] - sum_sc[i]; k++) {
-            var = vars[VARS_X + sum_sc[i] + k];
-            y[i][k] = (int) SCIPgetSolVal(scip, bestSolution, var);
-        }
-    }
-
-    var = vars[VARS_X + VARS_Y];
-    dc = (int) SCIPgetSolVal(scip, bestSolution, var);
-
-    var = vars[VARS_X + VARS_Y + 1];
-    df = (int) SCIPgetSolVal(scip, bestSolution, var);
-
-    for (i = 0; i < sc_size; i++) {
-        for (k = 0; k < sum_sc[i + 1] - sum_sc[i]; k++) {
-            sum = 0;
-            for (l = 0; l < string_size; l++) {
-                int pos = value_symbol(alphabet, alpha_size, sc[i][k + l]);
-                if (pos != -1)
-                    sum += x[l][pos];
-            }
-            if (y[i][k] == 1 && sum > dc) {
-                fprintf(file, "Problema na restricao (2) na string %d posicao %d.\n", i, k);
-                valid = false;
-            }
-        }
-    }
-
-    for (i = 0; i < sf_size; i++) {
-        for (k = 0; k < sum_sf[i + 1] - sum_sf[i]; k++) {
-            sum = 0;
-            for (l = 0; l < string_size; l++) {
-                int pos = value_symbol(alphabet, alpha_size, sf[i][k + l]);
-                if (pos != -1)
-                    sum += x[l][pos];
-            }
-            if (sum < df) {
-                fprintf(file, "Problema na restricao (3) na string %d posicao %d.\n", i, k);
-                valid = false;
-            }
-        }
-    }
-
-    for (i = 0; i < sc_size; i++) {
-        sum = 0;
-        for (k = 0; k < sum_sc[i + 1] - sum_sc[i]; k++) {
-            sum += y[i][k];
-        }
-        if (sum < 1) {
-            fprintf(file, "Problema na restricao (4) na string %d.\n", i);
-            valid = false;
-        }
-    }
-
-    input = fopen(filename, "r");
-    if (!input) exit(3);
-
-    strcat(sol_x, "");
-    for(i = 0; i < string_size; i++) {
-        for (j = 0; j < alpha_size; j++) {
-            var = vars[i * alpha_size + j];
-            solval = SCIPgetSolVal(scip, bestSolution, var);
-            if(solval == 0.0)
-            {
-                aux[0] = symbol_value(alphabet, alpha_size, j);
-                aux[1] = '\0';
-                strcat(sol_x, aux);
-            }
-        }
-    }
-
-    if (valid){
-        printf("Solucao validada com sucesso!"); fflush(stdout);}
-    else{
-        printf("Falha na validacao da solucao!"); fflush(stdout);}
-
-    for (i = 0; i < string_size; i++) {
-        free(x[i]);
-    }
-    free(x);
-
-    for (i = 0; i < sc_size; i++) {
-        free(y[i]);
-    }
-    free(y);
-
-    fclose(file);
-    fclose(input);
-}
-
-int objective_value(int  *sum_sc, int *sum_sf, char **Sc, char **Sf, int sc_size, int sf_size, int kc, int kf, char *alpha, int alpha_size, int string_size, int *solution) {
-    int dif = 0;
-    int dc = 99999;
-    int df = -1;
-    int aux = 0;
-    int menor_dif_sc, maior_dif_sf;
-    int i, j, k, l;
-    
-    dc = -1 * string_size;
-
-    if (sc_size > 0) {
-        for (i = 0; i < sc_size; i ++) {
-            menor_dif_sc = (sum_sc[i+1]+string_size-1) - sum_sc[i];
-            
-            for (j = 0; j <= (sum_sc[i+1]+string_size-1) - sum_sc[i] -string_size ; j ++) {
-                l = 0;
-                dif = 0;
-                
-                for (k = j; k < j + string_size; k ++) {
-                    if (symbol_value(alpha, alpha_size, solution[l++]) != Sc[i][k]) {
-                    dif ++;
-                    }
-                }
-                menor_dif_sc = menor_dif_sc < dif ? menor_dif_sc : dif;
-                
-            }
-            dc = menor_dif_sc > dc ? menor_dif_sc : dc; 
-        }
-    }
-    else dc = 0;
-    
-    //Checar se obedece em sf
-    df = string_size;
-    if (sf_size > 0) {
-        for (i = 0; i < sf_size; i ++) {
-            maior_dif_sf = -1;
-            for (j = 0; j <= (sum_sf[i+1]+string_size-1) - sum_sf[i] - string_size ; j ++) { l = 0;
-                dif = 0;
-                for (k = j; k < j + string_size; k ++) {
-                    if (symbol_value(alpha, alpha_size, solution[l++]) != Sf[i][k]) {
-                    dif ++;
-                    }
-                }        
-                // maior_dif_sf = dif > maior_dif_sf ? dif : maior_dif_sf;
-                df = dif < df ? dif : df; 
-            }
-
-        }
-    }
-    else df = 0;
-
-    return dc - df;
-}
-
-int dc_df_objective_value(int  *sum_sc, int *sum_sf, char **Sc, char **Sf, int sc_size, int sf_size, int kc, int kf, char *alpha, int alpha_size, int string_size, int *solution, int* dc, int* df) {
-    int dif = 0;
-    int aux = 0;
-    int menor_dif_sc, maior_dif_sf;
-    int i, j, k, l;
-    
-    //int dc = 99999;
-    //int df = -1;
-
-    *dc = -1 * string_size;
-    if (sc_size > 0) {
-
-        for (i = 0; i < sc_size; i ++) {
-            menor_dif_sc = (sum_sc[i+1]+string_size-1) - sum_sc[i];
-            
-            for (j = 0; j <= (sum_sc[i+1]+string_size-1) - sum_sc[i] -string_size ; j ++) {
-                l = 0;
-                dif = 0;
-                
-                for (k = j; k < j + string_size; k ++) {
-                    if (symbol_value(alpha, alpha_size, solution[l++]) != Sc[i][k]) {
-                    dif ++;
-                    }
-                }
-                
-                menor_dif_sc = menor_dif_sc < dif ? menor_dif_sc : dif;
-                
-            }
-            *dc = menor_dif_sc > *dc ? menor_dif_sc : *dc; 
-        }
-    }
-    else *dc = 0;
-    
-    //Checar se obedece em sf
-    *df = string_size;
-
-    if (sf_size > 0) {
-        for (i = 0; i < sf_size; i ++) {
-            maior_dif_sf = -1;
-            for (j = 0; j <= (sum_sf[i+1]+string_size-1) - sum_sf[i] - string_size ; j ++) {
-                l = 0;
-                dif = 0;
-                for (k = j; k < j + string_size; k ++) {
-                    if (symbol_value(alpha, alpha_size, solution[l++]) != Sf[i][k]) {
-                    dif ++;
-                    }
-                }        
-            //            maior_dif_sf = dif > maior_dif_sf ? dif : maior_dif_sf;
-            *df = dif < *df ? dif : *df; 
-            }
-        //        *df = maior_dif_sf < *df ? maior_dif_sf : *df; 
-        }
-    }
-    else *df = 0;
-    
-
-    return *dc - *df;
-}
-
-
-int neighbourhoodChange(int  *sum_sc, int *sum_sf, int *x, int *x2, int k, char **sc, char**sf, int sc_size, int sf_size, int kc, int kf, char *alphabet, int alpha_size, int string_size ) {
-    int i;
-
-    if (objective_value(sum_sc, sum_sf, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size, x2) < objective_value(sum_sc, sum_sf, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size,x)) {
-        for (i = 0; i < string_size; i ++) x[i] = x2[i];
-        k = 0;
-    }
-    else {
-        k = k + 1;
-    }
-    return k;
-}
-
-/* put your local methods here, and declare them static */
-int randomInteger (int low, int high)
+void printCompilerSettings(FILE* file)
 {
-  int k;
-  double d;
+    struct tm * ct;
+    const time_t t = time(NULL);
 
-  d = (double) rand () / ((double) RAND_MAX + 1);
-  k = d * (high - low + 1);
-  return low + k;
-}
-
-void shaking (double **T, double **best_T, int tcount, int *x2, int k, double *ng, int string_size, int alpha_size) {
-#ifdef DEBUG_VNS  
-    // printf("Shaking\n");
-#endif
-    int i, j, r, m;
-    int *viable_solutions = (int *) calloc(alpha_size, sizeof(int));
-    int quant;
-    double menor;
-    int i_menor;
-
-    //    srand(1);//time(NULL));
-#ifdef VBPL
-    for (i = 0; i < string_size; i ++) {
-        quant = 0;
-	menor = 1.0;
-        for (j = 0; j < alpha_size; j ++) {
-	  //	  printf("Posicao: %d, Simbolo: %d, Valor: %lf, Limite: %lf \n", i, j, T[i][j], ng[k]);
-            if (T[i][j] <= ng[k]) {
-                viable_solutions[quant] = j;
-                quant ++;
-            }
-	    else if(T[i][j]<menor - EPSILON){
-	      menor = T[i][j];
-	      i_menor = j;
-	    }
-        }
-	if(quant==0){
-	  x2[i] = i_menor;
-	}
-	else{
-	  r = randomInteger(0,quant-1);//rand();
-	  //	printf("\nrand=%d quant=%d", r, quant);
-	  x2[i] = viable_solutions[r];//quant % r];
-	}
-    }
-#elif BLPL
-
-    for (i = 0; i < string_size; i ++) {
-	    menor = 2.0; i_menor=2.0;
-        for (j = 0; j < alpha_size; j ++) {
+  // save compiling and executions settings
     
-	        if(T[i][j]<menor - EPSILON){
-	            menor = T[i][j];
-	            i_menor = j;
-	        }
-        }
-	    x2[i] = i_menor;
-    }
-    
-    int number_positions = 0.10 * string_size;
-    number_positions = randomInteger(0,string_size-1);
-    if (number_positions == 0) number_positions = 1;
-    
-    
-    for (i = 0; i < number_positions; i ++) {
-        m = randomInteger(0,string_size-1);//rand();
-        r = randomInteger(0,alpha_size-1);//rand();
-        menor = 2.0;
-        for (j = 0; j < alpha_size; j ++) {
-            if (T[m][j] < menor) {
-                menor = T[m][j];
-                i_menor = j;
-            }
-        }   
-        menor = T[m][i_menor];
-        T[m][i_menor] = T[m][r];
-        T[m][r] = menor;
-        x2[m] = r;
-    }
-    
+#if defined DEBUG || defined DEBUG_VNS || defined DEBUG_RA || defined DEBUG_BCPA
+   fprintf(file, "DEBUG=1\n");
 #else
-    
-    
+   fprintf(file, "DEBUG=0\n");
 #endif
-#ifdef DEBUG_VNS		      
-    for (i = 0; i < string_size; i ++) {
-        //printf("%d ", x2[i]);
-    }
-    //printf("\n");
-#endif
-    free(viable_solutions);
-    return;
+   
+   fprintf(file, "Parameters settings file=%s\n", param.parameter_stamp);
+   fprintf(file, "Instance file=%s\n", instance_filename);
+   ct = localtime(&t);
+   fprintf(file, "Date=%d-%.2d-%.2d\nTime=%.2d:%.2d:%.2d\n", ct->tm_year+1900, ct->tm_mon, ct->tm_mday, ct->tm_hour, ct->tm_min, ct->tm_sec);
 }
 
+int readInstance(SCIP* scip, char* filename)
+{
+  SCIP_RETCODE retcode;
+  SCIP_RESULT result;
 
-void lpImprovement(int  *sum_sc, int *sum_sf, double **T, double** best_T, double **Y, int *x, int *x2, int k, int ky, double *ng, double *ny, char **sc, char**sf, int sc_size, int sf_size, int kc, int kf, char *alphabet, int alpha_size, int string_size, SCIP_PROBDATA *probdata,  SCIP_SOL *bestSolution ) {
-    int neighbourhood = k;
-    SCIP* scip;
-    char name[SCIP_MAXSTRLEN];
-    int i, j, l, m;
-    SCIP_CONS** conss;
-    SCIP_VAR** vars, *var;
-    int fxaux;
-    // printf("LPIMPROVEMNT\n");fflush(stdout);
- 
- 
-    fxaux = objective_value(sum_sc, sum_sf, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size, x2);
+  retcode = readerDssp(scip,filename, &result);
 
-    SCIP_CALL( SCIPcreate(&scip) );
-    SCIP_CALL( SCIPincludeDefaultPlugins(scip) );
-    SCIP_CALL( SCIPsetLongintParam(scip, "limits/nodes", 1) );
-    SCIP_CALL( SCIPsetRealParam(scip, "limits/time", 30.00) );
-    
-    SCIP_CALL( SCIPsetIntParam(scip, "display/verblevel", 0) );
-    //SCIP_CALL( SCIPsetRealParam(scip, "limits/memory", 1000) );
-    
-    // SCIPinfoMessage(scip, NULL, "\n");
-    // SCIPinfoMessage(scip, NULL, "************************************************\n");
-    // SCIPinfoMessage(scip, NULL, "* Running BCPA *\n");
-    // SCIPinfoMessage(scip, NULL, "************************************************\n");
-    // SCIPinfoMessage(scip, NULL, "\n");
- 
-
-    //printf("Setup Problem\n");
-
-
-
-    int nvars, ncons;
-    double t, t_max, t_melhor;
-
-    SCIP_Real solval;
-
-    FILE *file;
-    clock_t antes, agora;
-
-    antes = clock();
-    
-    assert(scip_o != NULL);
-
-    
-    SCIP_CALL( SCIPcreateProbBasic(scip, "VNS - LP") );
-    
-
-    /* set objective sense */
-    SCIP_CALL(SCIPsetObjsense(scip, SCIP_OBJSENSE_MINIMIZE));
-
-    /* tell SCIP that the objective will be always integral */
-    SCIP_CALL(SCIPsetObjIntegral(scip));
-
-    /* Number of constraints */
-    // SCIP_CALL(SCIPallocBufferArray(scip, &conss, CONS_1 + CONS_2 + CONS_3 + CONS_4));
-    /* Number of constraints */
-    SCIP_CALL(SCIPallocBufferArray(scip, &conss, CONS_1 + CONS_2 + CONS_3 + CONS_4));
-    /* Number of variables */
-    // SCIP_CALL(SCIPallocBufferArray(scip, &vars, VARS_X + VARS_Y + VARS_D));
-    //SCIP_CALL(SCIPallocBufferArray(scip, &vars, VARS_X + VARS_Y + VARS_D));
-    SCIP_CALL(SCIPallocBufferArray(scip, &vars, VARS_X + VARS_Y + VARS_D));
-
-    /* (1) constraint - only one symbol is chosen */
-    for (i = 0; i < CONS_1; i++) {
-        SCIP_CALL(SCIPcreateConsBasicLinear (scip, &conss[i], "(1)", 0, NULL, NULL, (double) alpha_size - 1.0, (double) alpha_size - 1.0));
-        SCIP_CALL(SCIPaddCons(scip, conss[i]));
-    }
-
-    /* (2) constraint - is sci's symbol matched? */
-    ncons = i;
-    for (; i < ncons + CONS_2; i++) {
-        SCIP_CALL(SCIPcreateConsBasicLinear (scip, &conss[i], "(2)", 0, NULL, NULL, -SCIPinfinity(scip), (double) string_size)); // string_size faz o papel de M(no modelo)
-        SCIP_CALL(SCIPaddCons(scip, conss[i]));
-    }
-
-    /* (3) constraint - is sfi's symbol matched? */
-    ncons = i;
-    for (; i < ncons + CONS_3; i++) {
-        SCIP_CALL(SCIPcreateConsBasicLinear (scip, &conss[i], "(3)", 0, NULL, NULL,  0.0, SCIPinfinity(scip)));
-        SCIP_CALL(SCIPaddCons(scip, conss[i]));
-    }
-
-    /* (4) cosntraint - disjunctive constraint */
-    ncons = i;
-    for (; i < ncons + CONS_4; i++) {
-        SCIP_CALL(SCIPcreateConsBasicLinear (scip, &conss[i], "(4)", 0, NULL, NULL, 1.0, SCIPinfinity(scip)));
-        SCIP_CALL(SCIPaddCons(scip, conss[i]));
-    }
-   
-    nvars = 0;
-    ncons = i;nvars=0;
-    int posRandom;
-    int *randomTeste = (int *)malloc(alpha_size * sizeof(int));
-     for(i = 0; i < string_size; i++) {
-        int soma_vars = 0;
-        int pos_melhor=0; double melhor=2.0;
-        for (k = 0; k < alpha_size; k++) {
-            if (T[i][k] < (ng[neighbourhood] - 0.0001) && T[i][k] > (neighbourhood > 0 ? ng[neighbourhood-1] : -0.001) ) {
-                soma_vars +=1;
-            }
-            if (T[i][k] < melhor) {
-                pos_melhor = k;
-                melhor = T[i][k];
-            }
-        }
-        
-        for (j = 0; j < alpha_size; j++) {
-            (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "x_%d_%c", i, symbol_value(alphabet, alpha_size, j));
-            // SCIPdebugMessage("create variable %s\n", name);
-
-            /* create a basic variable object */
-            // int countRandom = 0;
-            // if (j == 0) {
-            //     ////printf("Comparando .....\n"); 
-            //     for (l = 0; l < alpha_size; l ++) {
-            //         //printf("T[i][l] %lf n %lf ", T[i][l], ng[k]);
-            //         if (T[i][l] < ng[neighbourhood] && T[i][l] > (neighbourhood > 0 ? ng[neighbourhood-1] : -0.001) ) {
-            //             randomTeste[countRandom] = l;
-            //             //printf("YAY %d\n", countRandom);
-            //             countRandom+=1;
-            //         } else {
-            //             //printf("NOP %d \n", countRandom);
-            //         }
-            //     }
-            //     //printf("CountRandom %d\n", countRandom); 
-            //     if (countRandom >= 0) {
-            //         posRandom = randomInteger(0, countRandom-1);
-            //     }
-            //     else posRandom = -1;
-            //     //printf("PosRandom definida como %d", posRandom);
-            // }
-            // //printf("J: %d  RandomTeste %d \n", j, randomTeste[posRandom]);
-            // if (j == randomTeste[posRandom] && randomInteger(0,100) > 25)  { 
-            //     SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 0.0, 0.0, SCIP_VARTYPE_BINARY));
-            //     //printf("ZEROU %d %d ", i, j);
-            // } else if (x2[i] == j){
-            //     SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 0.5, 0.0, SCIP_VARTYPE_BINARY));
-            // } else {
-            //     SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 1.0, 0.0, SCIP_VARTYPE_BINARY));
-            //     //printf("Criou normal");
-            // }
-            if (soma_vars == 0) {
-                    SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 1.0, 0.0, SCIP_VARTYPE_BINARY));
-            }else  if (T[i][j] < ng[neighbourhood] && T[i][j] > (neighbourhood > 0 ? ng[neighbourhood-1] : -0.001) ) {
-                SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, T[i][j], 0.0, SCIP_VARTYPE_BINARY));
-            } else {
-                SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 1.0, 1.0, 0.0, SCIP_VARTYPE_BINARY));  
-            }
-            assert(var != NULL);
-
-            vars[nvars++] = var;
-
-            /* add variable to the problem */
-            SCIP_CALL(SCIPaddVar(scip, var));
-
-
-            /* add variable to corresponding constraint */
-            /* add variable to constraint (1) */
-            SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_1(i)], var, 1.0));
-
-            /* add variable to constraint (2) */
-            for (k = 0; k < sc_size; k++) {
-                for (l = 0; l < sum_sc[k + 1] - sum_sc[k]; l++) {
-                    if (j == value_symbol(alphabet, alpha_size, sc[k][l + i]))
-                        SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_2(k, l)], var, 1.0));
-                }
-            }
-
-            /* add variable to constraint (3) */
-            for (k = 0; k < sf_size; k++) {
-                for (l = 0; l < sum_sf[k + 1] - sum_sf[k]; l++) {
-                    if (j == value_symbol(alphabet, alpha_size, sf[k][l + i]))
-                        SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_3(k, l)], var, 1.0));
-                }
-            }
-
-            
-            // if (arrayOfDefinedVars[i * alpha_size + j] != -1) {
-            //     SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_5(bcpa)], var, 1.0));
-            //     bcpa++;
-            // }
-        }
-    }
-
-     /**
-    * add variables yij
-    */
-     
-    for (i = 0; i < sc_size; i++) {
-        int soma_vars = 0;
-        int pos_melhor = -1; double melhor = -1;
-        
-        for (k = 0; k < sum_sc[i + 1] - sum_sc[i]; k++) {
-            if (Y[i][k] >= ny[ky] &&  Y[i][k] < ky == 0 ? 1.111 : ny[ky -1]) {
-                soma_vars +=1;
-            }
-            if (Y[i][k] > melhor) {
-                pos_melhor = k;
-                melhor = Y[i][k];
-            }
-        }
-        
-        for (j = 0; j < sum_sc[i + 1] - sum_sc[i]; j++) {
-            #ifdef BLPL
-                (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "y_%d_%d", i, j);
-                
-                /* create a basic variable object */
-                SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 1.0, 0.0, SCIP_VARTYPE_BINARY));
-                assert(var != NULL);
-    
-                vars[nvars++] = var;
-    
-                /* add variable to the problem */
-                SCIP_CALL(SCIPaddVar(scip, var));
-    
-                /* add variable to corresponding constraint */
-                /* add variable to constraint (2) */
-                SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_2(i, j)], var, string_size));
-    
-                /* add variable to constraint (4) */
-                SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_4(i)], var, 1.0));
-            #else
-                
-                (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "y_%d_%d", i, j);
-                // SCIPdebugMessage("create variable %s\n", name);
-                
-                /* create a basic variable object */
-                // if (soma_vars == 0) {
-                    SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 1.0, 0.0, SCIP_VARTYPE_BINARY));
-                // }else  if (Y[i][j] >= ny[ky] &&  Y[i][j] < ky == 0 ? 1.111 : ny[ky -1]) {
-                    // SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, Y[i][j], 1.0, 0.0, SCIP_VARTYPE_BINARY));
-                // } else {
-                    // SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 0.0, 0.0, SCIP_VARTYPE_BINARY));    
-                // }
-                
-                assert(var != NULL);
-    
-                vars[nvars++] = var;
-    
-                /* add variable to the problem */
-                SCIP_CALL(SCIPaddVar(scip, var));
-    
-                /* add variable to corresponding constraint */
-                /* add variable to constraint (2) */
-                SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_2(i, j)], var, string_size));
-    
-                /* add variable to constraint (4) */
-                SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_4(i)], var, 1.0));
-            #endif
-        }
-    }
-
-    /**
-    * add variable dc
-    */
-    (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "d_c");
-    // SCIPdebugMessage("create variable %s\n", name);
-
-
-    SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, (double) kc, 1.0, SCIP_VARTYPE_INTEGER));
-    
-    assert(var != NULL);
-
-    vars[nvars++] = var;
-
-    /* add variable to the problem */
-    SCIP_CALL(SCIPaddVar(scip, var));
-
-    /* add variable to corresponding constraint */
-    /* add variable to constraint (2) */
-    for (i = 0; i < sc_size; i++) {
-        for (j = 0; j < sum_sc[i + 1] - sum_sc[i]; j++) {
-            SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_2(i, j)], var, -1.0));
-        }
-    }
-
-
-    // SCIPinfoMessage(scip, NULL, "Original problem:\n");
-    // SCIP_CALL( SCIPprintOrigProblem(scip, NULL, "cip", FALSE) );
- 
-    // SCIPinfoMessage(scip, NULL, "\n");
-    SCIP_CALL( SCIPpresolve(scip) );
- 
-    /* SCIPinfoMessage(scip, NULL, "Reformulated problem:\n");
-    SCIP_CALL( SCIPprintTransProblem(scip, NULL, "cip", FALSE) );
-    */
- 
-    // SCIPinfoMessage(scip, NULL, "\nSolving...\n");
-    SCIP_CALL( SCIPsolve(scip) );
-
-    
-    bestSolution = SCIPgetBestSol(scip);
+  switch( retcode )
+  {
+  case SCIP_NOFILE:
+    SCIPinfoMessage(scip, NULL, "file <%s> not found\n", filename);
+    return 0;
+  case SCIP_PLUGINNOTFOUND:
+    SCIPinfoMessage(scip, NULL, "no reader for input file <%s> available\n", filename);
+    return 0;
+  case SCIP_READERROR:
+    SCIPinfoMessage(scip, NULL, "error reading file <%s>\n", filename);
+    return 0;
+  default:
+    SCIP_CALL( retcode );
+  }
+  return result;
+}
+int contFrac(SCIP* scip)
+{
+  int i, totalFrac, nvars;
+  SCIP_VAR **vars;
+  SCIP_PROBDATA* probdata;
+  double solval;
   
-    probdata = SCIPgetProbData(scip);
-   
-    //    SCIPinfoMessage(scip, NULL, "\nSolution:\n");
-    //    SCIP_CALL( SCIPprintSol(scip, SCIPgetBestSol(scip), NULL, FALSE) );
-    //     
+  assert(scip != NULL);
+  probdata = SCIPgetProbData(scip);
+  assert(probdata != NULL);
 
-            for(i = 0; i < string_size; i++) {
-            double menor = 2.0;
-            int ind = -1;
-            for (j = 0; j < alpha_size; j++) {
-                var = vars[i * alpha_size + j];
-                solval = SCIPgetSolVal(scip, bestSolution, var);
-                // printf("%f ", solval);
-                if (solval < menor) {
-                    menor = solval;
-                    ind = j;
-                }
-            }
-            // printf("\n");
-            x2[i] = ind;
-            // printf("INDICE %d\n", ind);
-        } 
-        
-        //printf("###################################\n");
-        // for(i = 0; i < string_size; i++) {
-            
-        //     printf("%c ",symbol_value(alphabet, alpha_size,  x2[i]));
-            
-        // }printf("\n");
-        
-        // printf("%d\n", objective_value(sum_sc, sum_sf, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size, x2));
-        if (objective_value(sum_sc, sum_sf, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size, x2) < objective_value(sum_sc, sum_sf, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size,x)){
-            int nz = 0;
-            for(i = 0; i < string_size; i++) {
-                for (j = 0; j < alpha_size; j++) {
-                    var = vars[nz++];
-                    solval = SCIPgetSolVal(scip, bestSolution, var);
-                    if (solval < 0.0000) solval = 0.0;
-                    best_T[i][j] = solval;
-                }
-            }
-            for (i = 0; i < sc_size; i ++) {
-                for (j = 0; j < sum_sc[i + 1] - sum_sc[i]; j ++) {
-                    var = vars[nz++];
-                    solval = SCIPgetSolVal(scip, bestSolution, var);
-                    if (solval <= -0.0001) solval = 0.0;
-                    Y[i][j] = solval;
-                }
-            }
-        }
-       FILE *fp;
-    //     #ifdef BLPL
-    //   fp = fopen("relaxed1.txt", "a+");
-    //      for(i = 0; i < string_size; i++) {
-            
-    //         fprintf(fp, "%c ",symbol_value(alphabet, alpha_size,  x2[i]));
-            
-    //     }fprintf(fp, " : ");
-        
-    //     fprintf(fp, "%d\n", objective_value(sum_sc, sum_sf, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size, x2));
-    //   fclose (fp);
-    //   #else
-    //     fp = fopen("relaxed2.txt", "a+");
-    //      fprintf(fp, "rand-20-5-5-250-1.dssp;%d;", k );
-    //      for(i = 0; i < string_size; i++) {
-            
-    //         fprintf(fp, "%c",symbol_value(alphabet, alpha_size,  x2[i]));
-            
-    //     }fprintf(fp, ";");
-        
-    //     fprintf(fp, "%d;\n", objective_value(sum_sc, sum_sf, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size, x2));
-    //   fclose (fp);
-    //   #endif
-    
-    for(i = 0; i < ncons; i++) {
-      SCIP_CALL( SCIPreleaseCons(scip, &(conss[i]) ));  
+  nvars = SCIPprobdataGetNVars(probdata);
+  vars = SCIPprobdataGetVars(probdata);
+
+  totalFrac = 0;
+  for(i = 0; i < nvars; i++) {
+    solval = SCIPgetVarSol(scip, vars[i]);
+    if(!SCIPisFeasIntegral(scip, solval)) {
+      totalFrac++;
     }
-    for(i = 0; i < nvars; i++ ){
-      SCIP_CALL( SCIPreleaseVar(scip, &(vars[i]) ));
+  }
+  return totalFrac;
+}
+SCIP_RETCODE printStatistic(SCIP* scip, char* outputname, int dc, int df)
+{
+   FILE* fout;
+   char filename[SCIP_MAXSTRLEN];
+   SCIP_Bool outputorigsol = FALSE;
+   //   compilingOptionsT compilingOptions;
+   SCIP_SOL* bestSolution;
+   double tempo;
+   SCIP_PROBDATA* probdata;
+   int string_size, alpha_size, sc_size, sf_size, frac, nvars;
+   
+   bestSolution = SCIPgetBestSol(scip);
+   /*******************
+    * Solution Output *
+    *******************/
+   //   SCIP_CALL( SCIPgetBoolParam(scip, "misc/outputorigsol", &outputorigsol) );
+   /* I found the name of those statistical information looking the scip source code at file scip.c (printPricerStatistics(), for instance)  */ 
+   outputorigsol = 1;
+   if ( outputorigsol )
+   {
+      SCIP_SOL* bestsol;
+
+      if(param.display_freq>0){
+        SCIPinfoMessage(scip, NULL, "\nprimal solution (original space):\n");
+        SCIPinfoMessage(scip, NULL, "=================================\n\n");
+      }
+      
+      bestsol = SCIPgetBestSol(scip);
+      if(param.display_freq>0){
+        if ( bestsol == NULL )
+          SCIPinfoMessage(scip, NULL, "no solution available\n");
+        else
+        {
+          SCIP_SOL* origsol;
+          
+          SCIP_CALL( SCIPcreateSolCopy(scip, &origsol, bestsol) );
+          SCIP_CALL( SCIPretransformSol(scip, origsol) );
+          SCIP_CALL( SCIPprintSol(scip, origsol, NULL, FALSE) );
+          SCIP_CALL( SCIPfreeSol(scip, &origsol) );
+        }
+      }
    }
-    SCIPfreeBufferArray(scip, &conss);
-    SCIPfreeBufferArray(scip, &vars);
-    //free(scip);
-    SCIP_CALL( SCIPfree(&scip) );
-    free(randomTeste);
-   
-    // printf("Fim LP Improvement\n"); fflush(stdout);
-
-    return;
-}
-
-void lpShaking(int  *sum_sc, int *sum_sf, double **T, double** best_T, double **Y, int *x, int *x2, int k, int ky, double *ng, double *ny, char **sc, char**sf, int sc_size, int sf_size, int kc, int kf, char *alphabet, int alpha_size, int string_size, SCIP_PROBDATA *probdata,  SCIP_SOL *bestSolution ) {
-    int neighbourhood = k;
-    SCIP* scip;
-    char name[SCIP_MAXSTRLEN];
-    int i, j, l, m;
-    SCIP_CONS** conss;
-    SCIP_VAR** vars, *var;
-    int fxaux;
-   
-    fxaux = objective_value(sum_sc, sum_sf, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size, x2);
-    // printf("lpShaking\n");fflush(stdout);
-
-    SCIP_CALL( SCIPcreate(&scip) );
-    SCIP_CALL( SCIPincludeDefaultPlugins(scip) );
-    SCIP_CALL( SCIPsetLongintParam(scip, "limits/nodes", 1) );
-    SCIP_CALL( SCIPsetIntParam(scip, "display/verblevel", 0) );
-    SCIP_CALL( SCIPsetRealParam(scip, "limits/time", 60) );
-     
-
-    //printf("Setup Problem\n");
-
-    int quantRandom = randomInteger(1, k);
-    //    int quantRandom = randomInteger(1, string_size*0.5);
-    int nvars, ncons;
-    double t, t_max, t_melhor;
-
-    SCIP_Real solval;
-
-    FILE *file;
-    clock_t antes, agora;
-
-    antes = clock();
-    
-    assert(scip_o != NULL);
-
-    
-    SCIP_CALL( SCIPcreateProbBasic(scip, "VNS - LP") );
-    
-    /* set objective sense */
-    SCIP_CALL(SCIPsetObjsense(scip, SCIP_OBJSENSE_MINIMIZE));
-
-    /* tell SCIP that the objective will be always integral */
-    SCIP_CALL(SCIPsetObjIntegral(scip));
-
-    /* Number of constraints */
-    // SCIP_CALL(SCIPallocBufferArray(scip, &conss, CONS_1 + CONS_2 + CONS_3 + CONS_4));
-    /* Number of constraints */
-    SCIP_CALL(SCIPallocBufferArray(scip, &conss, CONS_1 + CONS_2 + CONS_3 + CONS_4 + quantRandom));
-    /* Number of variables */
-    // SCIP_CALL(SCIPallocBufferArray(scip, &vars, VARS_X + VARS_Y + VARS_D));
-    //SCIP_CALL(SCIPallocBufferArray(scip, &vars, VARS_X + VARS_Y + VARS_D));
-    SCIP_CALL(SCIPallocBufferArray(scip, &vars, VARS_X + VARS_Y + VARS_D));
-
-    /* (1) constraint - only one symbol is chosen */
-    for (i = 0; i < CONS_1; i++) {
-        SCIP_CALL(SCIPcreateConsBasicLinear (scip, &conss[i], "(1)", 0, NULL, NULL, (double) alpha_size - 1.0, (double) alpha_size - 1.0));
-        SCIP_CALL(SCIPaddCons(scip, conss[i]));
-    }
-
-    /* (2) constraint - is sci's symbol matched? */
-    ncons = i;
-    for (; i < ncons + CONS_2; i++) {
-        SCIP_CALL(SCIPcreateConsBasicLinear (scip, &conss[i], "(2)", 0, NULL, NULL, -SCIPinfinity(scip), (double) string_size)); // string_size faz o papel de M(no modelo)
-        SCIP_CALL(SCIPaddCons(scip, conss[i]));
-    }
-
-    /* (3) constraint - is sfi's symbol matched? */
-    ncons = i;
-    for (; i < ncons + CONS_3; i++) {
-        SCIP_CALL(SCIPcreateConsBasicLinear (scip, &conss[i], "(3)", 0, NULL, NULL,  0.0, SCIPinfinity(scip)));
-        SCIP_CALL(SCIPaddCons(scip, conss[i]));
-    }
-
-    /* (4) cosntraint - disjunctive constraint */
-    ncons = i;
-    for (; i < ncons + CONS_4; i++) {
-        SCIP_CALL(SCIPcreateConsBasicLinear (scip, &conss[i], "(4)", 0, NULL, NULL, 1.0, SCIPinfinity(scip)));
-        SCIP_CALL(SCIPaddCons(scip, conss[i]));
-    }
-    ncons = i;
-    int kcons = i;
-
-    /* (5) shaking constraints */
-    for (; i < ncons + quantRandom; i++) {
-      SCIP_CALL(SCIPcreateConsBasicLinear (scip, &conss[i], "(5)", 0, NULL, NULL, -SCIPinfinity(scip), 0.0));
-        SCIP_CALL(SCIPaddCons(scip, conss[i]));
-    }
-    nvars = 0;
-    ncons = i;nvars=0;
-    int posRandom;
-    int *randomTeste = (int *)malloc(alpha_size * sizeof(int));
-
-    int* posicaoTrocar = (int *) malloc(quantRandom * sizeof(int));
-    int* simboloTrocar = (int *) malloc(quantRandom * sizeof(int));
-    int* posicoes = (int*) malloc(string_size * sizeof(int));
-    int totalPosicoes = string_size, posicaoSorteada;
-
-    for (i = 0; i < string_size; i++) {
-      posicoes[i]=i;
-    }
-
-    for (i = 0; i < quantRandom; i ++) {
-      // sortea uma posicao da string alvo a ser setada pelo shaking
-      posicaoSorteada = randomInteger(0, totalPosicoes-1);
-      posicaoTrocar[i] = posicoes[posicaoSorteada];
-      posicoes[posicaoSorteada] = posicoes[--totalPosicoes];
-
-      // sortea um simbolo para ser preferencial na posicao sorteada
-      simboloTrocar[i] = randomInteger(0, alpha_size-1);
-    }
-    
-    int countPosTrocar = 0;
-     for(i = 0; i < string_size; i++) {
-        int soma_vars = 0;
-        int pos_melhor=0; double melhor=2.0;
-        // for (k = 0; k < alpha_size; k++) {
-        //     if (T[i][k] < (ng[neighbourhood] - 0.0001) && T[i][k] > (neighbourhood > 0 ? ng[neighbourhood-1] : -0.001) ) {
-        //         soma_vars +=1;
-        //     }
-        //     if (T[i][k] < melhor) {
-        //         pos_melhor = k;
-        //         melhor = T[i][k];
-        //     }
-        // }
-        int flag_trocar_pos = -1; // inicializa com -1
-        for (k = 0; k < quantRandom; k ++) {
-          if (posicaoTrocar[k] == i)
-            flag_trocar_pos = k;    // seta com a posicao k
-        }
-        
-        for (j = 0; j < alpha_size; j++) {
-            (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "x_%d_%c", i, symbol_value(alphabet, alpha_size, j));
-            // SCIPdebugMessage("create variable %s\n", name);
-
-            /* create a basic variable object */
-            // int countRandom = 0;
-            // if (j == 0) {
-            //     ////printf("Comparando .....\n"); 
-            //     for (l = 0; l < alpha_size; l ++) {
-            //         //printf("T[i][l] %lf n %lf ", T[i][l], ng[k]);
-            //         if (T[i][l] < ng[neighbourhood] && T[i][l] > (neighbourhood > 0 ? ng[neighbourhood-1] : -0.001) ) {
-            //             randomTeste[countRandom] = l;
-            //             //printf("YAY %d\n", countRandom);
-            //             countRandom+=1;
-            //         } else {
-            //             //printf("NOP %d \n", countRandom);
-            //         }
-            //     }
-            //     //printf("CountRandom %d\n", countRandom); 
-            //     if (countRandom >= 0) {
-            //         posRandom = randomInteger(0, countRandom-1);
-            //     }
-            //     else posRandom = -1;
-            //     //printf("PosRandom definida como %d", posRandom);
-            // }
-            // //printf("J: %d  RandomTeste %d \n", j, randomTeste[posRandom]);
-            // if (j == randomTeste[posRandom] && randomInteger(0,100) > 25)  { 
-            //     SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 0.0, 0.0, SCIP_VARTYPE_BINARY));
-            //     //printf("ZEROU %d %d ", i, j);
-            // } else if (x2[i] == j){
-            //     SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 0.5, 0.0, SCIP_VARTYPE_BINARY));
-            // } else {
-            //     SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 1.0, 0.0, SCIP_VARTYPE_BINARY));
-            //     //printf("Criou normal");
-            // }
-            
-            if (flag_trocar_pos >= 0) // se posicao i eh uma das posicoes a ser setada pelo shaking
-                SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 1.0, 0.0, SCIP_VARTYPE_BINARY));
-            else
-              SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, best_T[i][j], 1.0, 0.0, SCIP_VARTYPE_BINARY));// fixar limite superior como best_T também?
-            assert(var != NULL);
-
-
-            vars[nvars++] = var;
-
-            /* add variable to the problem */
-            SCIP_CALL(SCIPaddVar(scip, var));
-
-
-            /* add variable to corresponding constraint */
-            /* add variable to constraint (1) */
-            SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_1(i)], var, 1.0));
-
-            /* add variable to constraint (2) */
-            for (k = 0; k < sc_size; k++) {
-                for (l = 0; l < sum_sc[k + 1] - sum_sc[k]; l++) {
-                    if (j == value_symbol(alphabet, alpha_size, sc[k][l + i]))
-                        SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_2(k, l)], var, 1.0));
-                }
-            }
-
-            /* add variable to constraint (3) */
-            for (k = 0; k < sf_size; k++) {
-                for (l = 0; l < sum_sf[k + 1] - sum_sf[k]; l++) {
-                    if (j == value_symbol(alphabet, alpha_size, sf[k][l + i]))
-                        SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_3(k, l)], var, 1.0));
-                }
-            }
-
-            /*(5)*/
-            // for (k = 0; k < quantRandom; k ++) {
-            //     if (i == posicaoTrocar[k] && j == simboloTrocar[k]) {
-            //         for (l = 0; l < alpha_size; l ++)
-            //             SCIP_CALL(SCIPaddCoefLinear(scip, conss[kcons+(i*(alpha_size) + l)], var, 1.0));
-            //     } else if (i == posicaoTrocar[k]) {
-            //         SCIP_CALL(SCIPaddCoefLinear(scip, conss[kcons+(i*(alpha_size) + j)], var, -1.0));
-            //     }
-            // }
-
-            if(flag_trocar_pos >= 0){ // se >=0 , isto eh, i eh uma posicao sorteada
-              if(simboloTrocar[flag_trocar_pos]==j){ // se j eh o simbolo sorteado para a posicao i
-                //
-                SCIP_CALL(SCIPaddCoefLinear(scip, conss[kcons + flag_trocar_pos], var, (double) alpha_size-1.0));
-              }
-              else{
-                SCIP_CALL(SCIPaddCoefLinear(scip, conss[kcons + flag_trocar_pos], var, -1.0));
-              }
-            }
-        
-            /*            if (countPosTrocar < quantRandom && i == posicaoTrocar[countPosTrocar] && j == simboloTrocar[countPosTrocar]) {
-                SCIP_CALL(SCIPaddCoefLinear(scip, conss[kcons + countPosTrocar], var, 1.0));
-                flag = 1;
-            } else if (i == posicaoTrocar[countPosTrocar] && countPosTrocar < quantRandom) {
-                SCIP_CALL(SCIPaddCoefLinear(scip, conss[kcons + countPosTrocar], var, -1.0));
-                flag = 1;
-                } */
-            
-            // if (arrayOfDefinedVars[i * alpha_size + j] != -1) {
-            //     SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_5(bcpa)], var, 1.0));
-            //     bcpa++;
-            // }
-        }
-        //        if (flag == 1) countPosTrocar++;
-    }
-
-     /**
-    * add variables yij
-    */
-     
-     for (i = 0; i < sc_size; i++) { // para cada string s em Sc
-        int soma_vars = 0;
-        int pos_melhor = -1; double melhor = -1;
-        
-        for (k = 0; k < sum_sc[i + 1] - sum_sc[i]; k++) { // verifica se y_sk estah em Nk e atualiza o maior y_sk
-            if (Y[i][k] >= ny[ky] &&  Y[i][k] < ky == 0 ? 1.111 : ny[ky -1]) {
-                soma_vars +=1;
-            }
-            if (Y[i][k] > melhor) {
-                pos_melhor = k;
-                melhor = Y[i][k];
-            }
-        }
-        
-        for (j = 0; j < sum_sc[i + 1] - sum_sc[i]; j++) {
-            #ifdef SBPL_SEMY
-                (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "y_%d_%d", i, j);
-                
-                /* create a basic variable object */
-                SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 1.0, 0.0, SCIP_VARTYPE_BINARY));
-                assert(var != NULL);
-    
-                vars[nvars++] = var;
-    
-                /* add variable to the problem */
-                SCIP_CALL(SCIPaddVar(scip, var));
-    
-                /* add variable to corresponding constraint */
-                /* add variable to constraint (2) */
-                SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_2(i, j)], var, string_size));
-    
-                /* add variable to constraint (4) */
-                SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_4(i)], var, 1.0));
-            #else
-                
-                (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "y_%d_%d", i, j);
-                // SCIPdebugMessage("create variable %s\n", name);
-                
-                /* create a basic variable object */
-                if (soma_vars == 0 && Y[i][j] > (melhor-0.05)) { // se nao existe nenhum y_ik em Nk => fixa o limite inferior do melhor (maior) dos y_ik com o valor da solucao atual
-                    SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, Y[i][j], 1.0, 0.0, SCIP_VARTYPE_BINARY));
-                }else  if (Y[i][j] >= ny[ky] &&  Y[i][j] < ky == 0 ? 1.111 : ny[ky -1]) { // se y_ij esta na vizinha Nk => fixa o limite inferior
-                    SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, Y[i][j], 1.0, 0.0, SCIP_VARTYPE_BINARY));
-                } else { // os demais sao descartados, isto eh, fixados em 0
-                    SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, 0.0, 0.0, SCIP_VARTYPE_BINARY));    
-                }
-                
-                assert(var != NULL);
-    
-                vars[nvars++] = var;
-    
-                /* add variable to the problem */
-                SCIP_CALL(SCIPaddVar(scip, var));
-    
-                /* add variable to corresponding constraint */
-                /* add variable to constraint (2) */
-                SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_2(i, j)], var, string_size));
-    
-                /* add variable to constraint (4) */
-                SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_4(i)], var, 1.0));
-            #endif
-        }
-    }
-    
-    /**
-    * add variable dc
-    */
-    (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "d_c");
-    // SCIPdebugMessage("create variable %s\n", name);
-
-
-    SCIP_CALL(SCIPcreateVarBasic(scip, &var, name, 0.0, (double) kc, 1.0, SCIP_VARTYPE_INTEGER));
-    
-    assert(var != NULL);
-
-    vars[nvars++] = var;
-
-    /* add variable to the problem */
-    SCIP_CALL(SCIPaddVar(scip, var));
-
-    /* add variable to corresponding constraint */
-    /* add variable to constraint (2) */
-    for (i = 0; i < sc_size; i++) {
-        for (j = 0; j < sum_sc[i + 1] - sum_sc[i]; j++) {
-            SCIP_CALL(SCIPaddCoefLinear(scip, conss[ROWS_2(i, j)], var, -1.0));
-        }
-    }
-
-
-    // SCIPinfoMessage(scip, NULL, "Original problem:\n");
-    // SCIP_CALL( SCIPprintOrigProblem(scip, NULL, "cip", FALSE) );
- 
-    // SCIPinfoMessage(scip, NULL, "\n");
-    SCIP_CALL( SCIPpresolve(scip) );
- 
-    /* SCIPinfoMessage(scip, NULL, "Reformulated problem:\n");
-    SCIP_CALL( SCIPprintTransProblem(scip, NULL, "cip", FALSE) );
-    */
- 
-    // SCIPinfoMessage(scip, NULL, "\nSolving...\n");
-    SCIP_CALL( SCIPsolve(scip) );
-
-    SCIP_CALL(SCIPwriteOrigProblem(scip, "dssp_lpShaking.lp", "lp", FALSE));
-    
-    bestSolution = SCIPgetBestSol(scip);
-  
-    probdata = SCIPgetProbData(scip);
-   
-    //    SCIPinfoMessage(scip, NULL, "\nSolution:\n");
-    //    SCIP_CALL( SCIPprintSol(scip, SCIPgetBestSol(scip), NULL, FALSE) );
-    //     
-
-            for(i = 0; i < string_size; i++) {
-            double menor = 2.0;
-            int ind = -1;
-            for (j = 0; j < alpha_size; j++) {
-                var = vars[i * alpha_size + j];
-                solval = SCIPgetSolVal(scip, bestSolution, var);
-                // printf("%f ", solval);
-                if (solval < menor) {
-                    menor = solval;
-                    ind = j;
-                }
-            }
-            // printf("\n");
-            x2[i] = ind;
-            // printf("INDICE %d\n", ind);
-        } 
-        
-        //printf("###################################\n");
-        // for(i = 0; i < string_size; i++) {
-            
-        //     printf("%c ",symbol_value(alphabet, alpha_size,  x2[i]));
-            
-        // }printf("\n");
-        
-        // printf("%d\n", objective_value(sum_sc, sum_sf, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size, x2));
-        if (objective_value(sum_sc, sum_sf, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size, x2) < objective_value(sum_sc, sum_sf, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size,x)){
-            int nz = 0;
-            for(i = 0; i < string_size; i++) {
-                for (j = 0; j < alpha_size; j++) {
-                    var = vars[nz++];
-                    solval = SCIPgetSolVal(scip, bestSolution, var);
-                    if (solval < 0.0000) solval = 0.0;
-                    best_T[i][j] = solval;
-                }
-            }
-            for (i = 0; i < sc_size; i ++) {
-                for (j = 0; j < sum_sc[i + 1] - sum_sc[i]; j ++) {
-                    var = vars[nz++];
-                    solval = SCIPgetSolVal(scip, bestSolution, var);
-                    if (solval <= -0.0001) solval = 0.0;
-                    Y[i][j] = solval;
-                }
-            }
-        }
-       FILE *fp;
-    //     #ifdef BLPL
-    //   fp = fopen("relaxed1.txt", "a+");
-    //      for(i = 0; i < string_size; i++) {
-            
-    //         fprintf(fp, "%c ",symbol_value(alphabet, alpha_size,  x2[i]));
-            
-    //     }fprintf(fp, " : ");
-        
-    //     fprintf(fp, "%d\n", objective_value(sum_sc, sum_sf, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size, x2));
-    //   fclose (fp);
-    //   #else
-    //     fp = fopen("relaxed2.txt", "a+");
-    //      fprintf(fp, "rand-20-5-5-250-1.dssp;%d;", k );
-    //      for(i = 0; i < string_size; i++) {
-            
-    //         fprintf(fp, "%c",symbol_value(alphabet, alpha_size,  x2[i]));
-            
-    //     }fprintf(fp, ";");
-        
-    //     fprintf(fp, "%d;\n", objective_value(sum_sc, sum_sf, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size, x2));
-    //   fclose (fp);
-    //   #endif
-    
-    for(i = 0; i < ncons; i++) {
-      SCIP_CALL( SCIPreleaseCons(scip, &(conss[i]) ));  
-    }
-    for(i = 0; i < nvars; i++ ){
-      SCIP_CALL( SCIPreleaseVar(scip, &(vars[i]) ));
+   else
+   {
+     if(param.display_freq>0){
+       SCIPinfoMessage(scip, NULL, "\nprimal solution (transformed space):\n");
+       SCIPinfoMessage(scip, NULL, "====================================\n\n");
+       
+       SCIP_CALL( SCIPprintBestSol(scip, NULL, FALSE) );
+     }
    }
-    SCIPfreeBufferArray(scip, &conss);
-    SCIPfreeBufferArray(scip, &vars);
-    //    free(scip);
-    SCIP_CALL( SCIPfree(&scip) );    
-    free(randomTeste);
-    free(posicaoTrocar);
-    free(simboloTrocar);
+
+
+   /**************
+    * Statistics *
+    **************/
+   if(param.display_freq>0){
+     SCIPinfoMessage(scip, NULL, "\nStatistics\n");
+     SCIPinfoMessage(scip, NULL, "==========\n\n");
+     SCIP_CALL( SCIPprintStatistics(scip, NULL) );
+   }
+   /*******************************
+    * Save run output information *
+    *******************************/
+   tempo = (agora-antes)/((double) CLOCKS_PER_SEC);
+
+   /*****************************
+    * Save best solution found  *
+    *****************************/
+   printSol(scip, outputname, tempo);
    
-    //  printf("Fim Shaking\n"); fflush(stdout);
+   (void) SCIPsnprintf(filename, SCIP_MAXSTRLEN, "%s.out", outputname);
+   //   strcat(filename, ".out");
 
-    return;
+   fout = fopen(filename, "w");
+   if(!fout){
+     printf("\nProblem to create output file: %s", filename);
+   }
+   else{
+     /* recupera dados do problema*/
+     probdata = SCIPgetProbData(scip);
+     assert(probdata != NULL);
+     string_size = SCIPprobdataGetString_size(probdata);
+     sf_size = SCIPprobdataGetSf_size(probdata);
+     sc_size = SCIPprobdataGetSc_size(probdata);
+     alpha_size = SCIPprobdataGetAlpha_size(probdata);
+     nvars = SCIPprobdataGetNVars(probdata);
+
+     /* contabiliza frac */
+     frac = contFrac(scip);
+     
+     UB = SCIPgetPrimalbound(scip);
+     LB = SCIPgetDualbound(scip);
+     if(param.heur!=NONE){
+       fprintf(fout,"%s;%d;%d;%d;%d;%d;%d;%lli;%lf;%lf;%lf;%lf;%lf;%lli;%d;%lf;%lf;%lli;%d;%s;%lf;%lf;%lf;%d;%d", instance_filename,alpha_size, sc_size,sf_size,string_size,frac,nvars,SCIPgetNRootLPIterations(scip), tempo, LB, UB, SCIPgetGap(scip), SCIPgetDualboundRoot(scip),SCIPgetNTotalNodes(scip), SCIPgetNNodesLeft(scip), SCIPgetSolvingTime(scip),SCIPgetTotalTime(scip),SCIPgetMemUsed(scip),SCIPgetStatus(scip), heurName[param.heur], heurValue, tempoHeur, firstUB, dc, df);
+       printf("%s;%d;%d;%d;%d;%d;%d;%lli;%lf;%lf;%lf;%lf;%lf;%lli;%d;%lf;%lf;%lli;%d;%s;%lf;%lf;%lf;%d;%d", instance_filename,alpha_size, sc_size,sf_size,string_size,frac,nvars,SCIPgetNRootLPIterations(scip), tempo, LB, UB, SCIPgetGap(scip), SCIPgetDualboundRoot(scip),SCIPgetNTotalNodes(scip), SCIPgetNNodesLeft(scip), SCIPgetSolvingTime(scip),SCIPgetTotalTime(scip),SCIPgetMemUsed(scip),SCIPgetStatus(scip), heurName[param.heur], heurValue, tempoHeur, firstUB, dc, df);
+     }
+     else{
+       fprintf(fout,"%s;%d;%d;%d;%d;%d;%d;%lli;%lf;%lf;%lf;%lf;%lf;%lli;%d;%lf;%lf;%lli;%d;%s;-;-;-;-;-", instance_filename,alpha_size, sc_size,sf_size,string_size,frac,nvars,SCIPgetNRootLPIterations(scip), tempo, LB, UB, SCIPgetGap(scip), SCIPgetDualboundRoot(scip),SCIPgetNTotalNodes(scip), SCIPgetNNodesLeft(scip), SCIPgetSolvingTime(scip),SCIPgetTotalTime(scip),SCIPgetMemUsed(scip),SCIPgetStatus(scip), heurName[param.heur]);
+       printf("%s;%d;%d;%d;%d;%d;%d;%lli;%lf;%lf;%lf;%lf;%lf;%lli;%d;%lf;%lf;%lli;%d;%s;-;-;-;-;-", instance_filename,alpha_size, sc_size,sf_size,string_size,frac,nvars,SCIPgetNRootLPIterations(scip), tempo, LB, UB, SCIPgetGap(scip), SCIPgetDualboundRoot(scip),SCIPgetNTotalNodes(scip), SCIPgetNNodesLeft(scip), SCIPgetSolvingTime(scip),SCIPgetTotalTime(scip),SCIPgetMemUsed(scip),SCIPgetStatus(scip), heurName[param.heur]);
+     }
+     /*     if(bestSolution!=NULL){
+       fprintf(fout, ";bestsol in %lld;%lf;%d;%s", SCIPsolGetNodenum(bestSolution),
+         SCIPsolGetTime(bestSolution),
+         SCIPsolGetDepth(bestSolution),
+         SCIPsolGetHeur(bestSolution) != NULL
+         ? SCIPheurGetName(SCIPsolGetHeur(bestSolution))
+         : (SCIPsolGetRunnum(bestSolution) == 0 ? "initial" : "relaxation"));
+         }
+     */
+
+     fprintf(fout, ";%s\n", param.parameter_stamp);
+     printf(";%s\n", param.parameter_stamp);
+     fclose(fout);
+   }
+   return SCIP_OKAY;
 }
 
+/** 
+ * creates a SCIP instance with default plugins, and set SCIP parameters 
+ */
+SCIP_RETCODE configScip(
+  SCIP** pscip
+   )
+{
+  SCIP* scip = NULL;
 
-void firstImprovement(int  *sum_sc, int *sum_sf, double **T, int *x2, int k, double *ng, char **sc, char**sf, int sc_size, int sf_size, int kc, int kf, char *alphabet, int alpha_size, int string_size) {
-    int *x_i, *x_aux,  i = 0, j = 0, m=0, ix = 0, iz=0, teste=0; 
-    int fx2, fxaux, fxi, flag;
-    x_aux = (int *) calloc(string_size, sizeof(int));
-    x_i = (int *) calloc(string_size, sizeof(int));
-#ifdef DEBUG_VNS		      
-    printf("First Improvement: \n");
-#endif
-    do {
-      for (j = 0; j < string_size; j++) x_aux[j] = x2[j]; 
-        fxaux = objective_value(sum_sc, sum_sf, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size, x_aux);
-#ifdef DEBUG_VNS		      
-        printf("K: %d, f(x'): %d\n", k, fxaux);
-#endif
-        i = 0; ix = 0; iz = 0;
-        do {
-            for (j = 0; j < string_size; j++) x_i[j] = x2[j];
+  /*********
+    * Setup *
+    *********/
 
-            flag = 0;
-            int old_ix = ix;
-            for (j = ix; j < string_size; j ++) {
-	            for (m = iz; m < alpha_size; m ++) { // nao esta olhando toda a vizinhanca...
-                    if (x_i[j] == m) continue;
-
-#ifdef VNSFIRST                    
-                    if (T[j][m] < ng[k] && T[j][m] > (k > 0 ? ng[k-1] : 0.0)) {
-#ifdef DEBUG_VNS		      
-                        printf("\nTroca x[%d]=%d por %d", j,x_i[j], m);
-#endif
-                        x_i[j] = m;
-                        flag = 1;
-                        if(old_ix == ix) ix = j;
-                        iz = m+1; // tenta mudar outro simbolo na posicao j
-                        if(iz==alpha_size){ // se tentou todos, muda de posicao
-                            iz = 0;
-                            ix = j+1;
-                        }
-                        break;
-                    }
-#endif
-#ifdef VNSSECOND
-                    if (T[j][m] < ng[k] && T[j][m] > 0.0) {
-#ifdef DEBUG_VNS		      
-                        printf("\nTroca x[%d]=%d por %d", j,x_i[j], m);
-#endif
-                        x_i[j] = m;
-                        flag = 1;
-                        if(old_ix == ix)  ix = j;
-                        iz = m+1; // tenta mudar outro simbolo na posicao j
-                        if(iz==alpha_size){ // se tentou todos, muda de posicao
-                            iz = 0;
-                            ix = j+1;
-                        }
-                        break;
-                    }
-#endif
-                }
-                    if (flag == 1) break;
-                }
-            i++;
-            if (flag == 0) break;
-            fxi = objective_value(sum_sc, sum_sf, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size, x_i);
-#ifdef DEBUG_VNS		          
-            printf("\tfx%d: %d\n", i, fxi);
-#endif
-        } while (fxaux <= fxi && i < 10000);
-        if (flag == 0 || i >= 100) break;
-
-        teste++;
-        for (j = 0; j < string_size; j++) x2[j] = x_i[j];
-    } while(fxaux >= fxi); //objective_value(sum_sc, sum_sf, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size, x2));
-#ifdef DEBUG_VNS		      
-    printf("\nfinal first improvement f(x')=%d", objective_value(sum_sc, sum_sf, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size, x2));
-#endif
-
-    free(x_aux);
-    free(x_i);
-    return;
-}
-
-double vns_main (SCIP* scip, char *filename, double tempo) {
-    int i, j, string_size, alpha_size, *heur;
-    double vns;
-    char name[SCIP_MAXSTRLEN], *alphabet;
-    int k, k_max;
-    double t, t_max, t_melhor;
-    #ifdef NSIZEM
-    double ng[2] = {0.333, 0,666 };
-    double ny[2] = {0.666, 0,333 };
-    int ky = 0, ky_max = 3;
-    #elif NSIZES
-    double ng[1] = { 0.49999999999};
-    double ny[1] = { 0.49999999999 };
-    int ky = 0, ky_max = 2;
-    #elif NSIZEL
-    double ng[3] = {0.25555555, 0.49999999999, 0.745555555};
-    double ny[3] = {0.745555555, 0.49999999999, 0.25555555 };
-    int ky = 0, ky_max = 4;
-    #elif NSIZELL
-    double ng[4] = {0.2, 0.4, 0.6, 0.8};
-    double ny[4] = {0.8, 0.4, 0.6, 0.8};
-    int ky = 0, ky_max = 4;
-    #endif
-    char **sc, **sf;
-    int sc_size, sf_size;
-    int kc, kf;
-    int  *sum_sc, *sum_sf;
-    int dc, df;
-
-    SCIP_SOL *bestSolution;
-    SCIP_PROBDATA *probdata;
-    SCIP_VAR **vars, *var;
-    SCIP_Real solval;
-
-    FILE *file;
-    clock_t antes, agora;
-
-    srand(1);//time(NULL));    
-    antes = clock();
-    
-    assert(scip != NULL);
-
-    bestSolution = SCIPgetBestSol(scip);
+   /* initialize SCIP */
+   SCIP_CALL( SCIPcreate(&scip) );
+   
+   /* include crtp reader */
+   //   SCIP_CALL( SCIPincludeReaderCrtp(scip) );
   
-    probdata = SCIPgetProbData(scip);
-    assert(probdata != NULL);
+   /* include default SCIP plugins */
+   SCIP_CALL( SCIPincludeDefaultPlugins(scip) );
 
-    // nvars = SCIPprobdataGetNVars(probdata);
-    vars = SCIPprobdataGetVars(probdata);
-    string_size = SCIPprobdataGetString_size(probdata);
-    alphabet = SCIPprobdataGetAlphabet(probdata);
-    alpha_size = SCIPprobdataGetAlpha_size(probdata);
-    sc = SCIPprobdataGetSc(probdata);
-    sf = SCIPprobdataGetSf(probdata);
-    sc_size = SCIPprobdataGetSc_size(probdata);
-    sf_size = SCIPprobdataGetSf_size(probdata);
-    kc = SCIPprobdataGetKc(probdata);
-    kf = SCIPprobdataGetKf(probdata); 
-    sum_sc = SCIPprobdataGetSum_sc(probdata);
-    sum_sf = SCIPprobdataGetSum_sf(probdata);
-    double **T, **best_T, **Y;
-    T = (double **) calloc(string_size, sizeof(double *));
-    for (i = 0; i < string_size; i++) {
-        T[i] = (double *) calloc(alpha_size, sizeof(double));
+   if(!param.scipdefault){
+     /* for column generation instances, disable restarts */
+     SCIP_CALL( SCIPsetIntParam(scip,"presolving/maxrestarts",0) ); //param.presolve_maxrestarts) ); // 0
+
+     /* turn off all separation algorithms */
+     SCIP_CALL( SCIPsetSeparating(scip, SCIP_PARAMSETTING_OFF, TRUE) ); // turn off
+
+     /* disable heuristics */
+     SCIP_CALL( SCIPsetHeuristics(scip, SCIP_PARAMSETTING_OFF, TRUE) );  // turn off
+
+// #if defined(BCPA) //|| defined(VNS)
+//     SCIP_CALL( SCIPincludeHeurmyheuristic(scip) );
+// #endif
+
+     /* disable presolving */
+     SCIP_CALL( SCIPsetPresolving(scip, SCIP_PARAMSETTING_OFF, TRUE) );
+
+     SCIP_CALL( SCIPsetIntParam(scip, "propagating/maxrounds", 0) );
+     SCIP_CALL( SCIPsetIntParam(scip, "propagating/maxroundsroot", 0) );
+
+     SCIP_CALL( SCIPsetIntParam(scip, "presolving/maxrounds", 0) );
+     SCIP_CALL( SCIPsetIntParam(scip, "separating/maxrounds", 0) );
+
+     // Branching priority using pseudocost rule! Perhaps, remove this should be better!
+     //   if(param.pscost_priority>0){
+     //      SCIP_CALL( SCIPsetIntParam(scip, "branching/pscost/priority", param.pscost_priority) ); //1000000
+     //   }
+   }
+   
+   SCIP_CALL( SCIPsetIntParam(scip, "display/freq", param.display_freq) ); //50
+  
+   /* set time limit */
+   SCIP_CALL( SCIPsetRealParam(scip, "limits/time", param.time_limit) ); // 1800
+
+   /* only root node */
+   //#ifdef ONLYROOT   
+   //   param.nodes_limit = 1;
+   //#endif
+   SCIP_CALL( SCIPsetLongintParam(scip, "limits/nodes", param.nodes_limit) );
+
+   SCIP_CALL( SCIPsetRealParam(scip, "numerics/lpfeastol", 1e-6) ); // primal feasibility tolerance
+   SCIP_CALL( SCIPsetRealParam(scip, "numerics/dualfeastol", 1e-6) ); // dual feasibility tolerance
+
+   *pscip = scip;
+   return SCIP_OKAY;
+}
+/**
+ * set default+user parameters
+ **/
+int setParameters(int argc, char** argv, parametersT* pparam)
+{
+  typedef struct{
+    const char* description;
+    const char* param_name;
+    void* param_var;
+    enum {INT, DOUBLE, STRING} type;
+    int ilb;
+    int iub;
+    double dlb;
+    double dub;
+    int idefault;
+    double ddefault;    
+  } settingsT;
+
+  enum {time_limit,display_freq,nodes_limit,presolve_maxrounds,presolve_maxrestarts,pscost_priority,propag,propag_maxrounds,propag_maxroundsroot, param_stamp, param_output_path, substring,pheur, local_search, vnstime, ngsize, vnssecond, semy, bcpa_rounding, ra_novo, ra_reduce, ra_merge, modelo_novo, problem, shaking, bcpatime_limit, scipdefault, total_parameters};
+
+  settingsT parameters[]={
+            {"time limit", "--time", &(param.time_limit), INT, -1, MAXINT, 0,0,600,0},
+            {"display freq", "--display", &(param.display_freq), INT, -1, MAXINT, 0,0,1,0},
+            {"nodes limit", "--nodes", &(param.nodes_limit), INT, -1, MAXINT, 0,0,1,0},
+            {"presolve maxrounds", "--presolve-rounds", &(param.presolve_maxrounds), INT, -1, MAXINT, 0,0,0,0},
+            {"presolve maxrestarts", "--presolve-restarts", &(param.presolve_maxrestarts), INT, -1, MAXINT, 0,0,0,0},
+            {"pscost priority", "--pscost-prior", &(param.pscost_priority), INT, -1, MAXINT, 0,0,1000000,0},
+            {"domain propagation", "--propag", &(param.propag), INT, 0, 1, 0,0,0,0},
+            {"propag maxrounds", "--propag-rounds", &(param.propag_maxrounds), INT, -1, MAXINT, 0,0,0,0},
+            {"propag maxrounds root", "--propag-rootrounds", &(param.propag_maxroundsroot), INT, -1, MAXINT, 0,0,0,0},
+            {"param stamp", "--param_stamp", &(param.parameter_stamp), STRING, 0,0,0,0,0,0},
+            {"output path", "--output_path", &(output_path), STRING, 0,0,0,0,0,0},
+            {"substring?", "--substring", &(param.substring), INT, 0, 1, 0, 0, 0, 0},
+            {"heur (0=none 1=ra 2=bcpa 3=blpl 4=sbpl)", "--heur", &(param.heur), INT, 0, 5, 0, 0, 0, 0},
+            {"local search (0=none, 1=first, 2=best, 3=lp)", "--ls", &(param.local_search), INT, 0, 4, 0, 0, 0, 0},
+            {"vns time", "--vnstime", &(param.vnstime), INT, 0, 300, 0, 0, 5, 0},
+            {"ng size", "--ngsize", &(param.ngsize), INT, 0, 5, 0, 0, 3, 0},
+            {"vns second", "--vnssec", &(param.vnssecond), INT, 0, 1, 0, 0, 0, 0},
+            {"sem y?", "--semy", &(param.semy), INT, 0, 1, 0, 0, 1, 0},
+            {"bcpa rounding?", "--bcpa_rounding", &(param.bcpa_rounding), INT, 0, 1, 0, 0, 1, 0},
+            {"ra novo?", "--ra_novo", &(param.ra_novo), INT, 0, 1, 0, 0, 0, 0},
+            {"ra reduce?", "--ra_reduce", &(param.ra_reduce), INT, 0, 1, 0, 0, 0, 0},
+            {"ra merge?", "--ra_merge", &(param.ra_merge), INT, 0, 1, 0, 0, 0, 0},
+            {"model_novo?", "--model_novo", &(param.model_novo), INT, 0, 1, 0, 0, 0, 0},
+            {"problem (0=CSP, 1=FSP, 2=DSP)", "--problem", &(param.problem), INT, 0, 2, 0, 0, 2, 0},
+            {"shaking (0=none, 1=normal, 2=lp)", "--shaking", &(param.shaking), INT, 0, 2, 0, 0, 0, 0},
+            {"bcpa time limit", "--bcpa_time", &(param.bcpatime_limit), INT, -1, MAXINT, 0,0,300,0},
+            {"scip default", "--scipdefault", &(param.scipdefault), INT, 0, 1, 0,0,0,0}
+  };
+  int i, j, ivalue, error;
+  double dvalue;
+  FILE *fin;
+
+  // total_parameters = sizeof(parameters)/sizeof(parameters[0]);
+  
+  
+  if (pparam==NULL)
+    return 0;
+  
+  // check arguments
+  if(argc<2){
+    printf("\nSintaxe: program <instance-file> <parameters-setting>. \nUse program --options to show options.\n");
+    return 0;
+  }
+
+  // show options
+  if(!strcmp(argv[1],"--options")){
+    //    showOptions();
+    printf("\noption                : default -   range        : description");
+    for(i=0;i<total_parameters;i++){
+      switch(parameters[i].type){
+      case INT:
+        printf("\n%-22s: %7d - [%3d,%8d] : %s", parameters[i].param_name, parameters[i].idefault, parameters[i].ilb, parameters[i].iub,parameters[i].description);
+        break;
+      case DOUBLE:
+        printf("\n%-22s: %7.1lf - [%3.1lf,%8.1lf] : %s", parameters[i].param_name, parameters[i].ddefault, parameters[i].dlb, parameters[i].dub,parameters[i].description);
+        break;
+      case STRING:
+        printf("\n%-22s:       * - [*,*]          : %s", parameters[i].param_name, parameters[i].description);
+      }
     }
-    best_T = (double **) calloc(string_size, sizeof(double *));
-    for (i = 0; i < string_size; i++) {
-        best_T[i] = (double *) calloc(alpha_size, sizeof(double));
-    }
-    Y = (double **) calloc(sc_size, sizeof(double *));
-    for (i = 0; i < sc_size; i++) {
-        Y[i] = (double *) calloc(sum_sc[i + 1] - sum_sc[i], sizeof(double));
-    }
-
-#ifdef DEBUG_VNS		      
-    printf("Alfabeto: \n");
-    for (i = 0; i < alpha_size; i ++) {
-        printf("%d %c\n", i, alphabet[i]);
-    }
-
-    printf("N-Vizinhancas: \n");
-    for (i = 0; i < 3; i ++) {
-        printf("%lf\n", ng[i]);
-    }
-#endif
-    int *x;
-    x = (int *) calloc(string_size, sizeof(int));
-
-    int *x2;
-    x2 = (int *) calloc(string_size, sizeof(int));
-    int nz = 0;
-    for(i = 0; i < string_size; i++) {
-        double menor = 2.0;
-        int ind = -1;
-        for (j = 0; j < alpha_size; j++) {
-            var = vars[nz++];
-            solval = SCIPgetSolVal(scip, bestSolution, var);
-            if (solval <= -0.0001) solval = 0.0;
-            T[i][j] = solval;
-            best_T[i][j] = solval;
-        }
-    }
-    for (i = 0; i < sc_size; i ++) {
-        for (j = 0; j < sum_sc[i + 1] - sum_sc[i]; j ++) {
-            var = vars[nz++];
-            solval = SCIPgetSolVal(scip, bestSolution, var);
-            if (solval <= -0.0001) solval = 0.0;
-            Y[i][j] = solval;
-            // printf("%lf ", Y[i][j]);fflush(stdout);
-        }
-    }
-
-    // printf("\nT\n");
-    //  for(i = 0; i < string_size; i++) {
-    //     for (j = 0; j < alpha_size; j++) {
-    //         printf("%.3lf ", T[i][j]);
-    //     }
-    //     printf("\n");
-    // }
-    // printf("\nY\n");
-    // for(i = 0; i < sc_size; i++) {
-    //     for (j = 0; j < string_size; j++) {
-    //         printf("%.3lf ", Y[i][j]);
-    //     }
-    //     printf("\n");
-    // } 
-    for(i = 0; i < string_size; i++) {
-        double menor = 2.0;
-        int ind = -1;
-        for (j = 0; j < alpha_size; j++) {
-            var = vars[i * alpha_size + j];
-            solval = SCIPgetSolVal(scip, bestSolution, var);
-            if (solval < menor) {
-                menor = solval;
-                ind = j;
-            }
-        }
-        x[i] = ind;
-    }
-
-    
-#ifdef DEBUG_VNS		      
-    vns = dc_df_objective_value(sum_sc, sum_sf, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size, x, &dc, &df);
-    printf("Valor: %lf\n", vns);
-    printf("Dc: %d\n", dc);
-    printf("Df: %d\n", df);
-#endif
-
-#ifdef DEBUG_VNS		      
-    printf("\nSolucao Base: \n");
-
-    for (i = 0; i < string_size; i ++) {
-        for (j = 0; j < alpha_size; j ++) {
-            printf("%lf ", T[i][j]);
-        }
-        printf("\n");
-    }
-#endif
-
-    // repeat
-    //     k ← 1;
-    //     repeat
-    //         x  ← Shake(x, k)
-    //         /* shaking */;
-    //         x ← FirstImprovement(x ) /* Local search */;
-    //         NeighbourhoodChange(x, x , k) /* Change neighbourhood */;
-    //     until k = k max ;
-    //     t ← CpuTime()
-    // until t > t max ;
-
-    k_max = 3;
-
-    t = 0;t_max=180; t_melhor = 0;
-    #ifdef TIMESSS
-    t_max = 5;
-    #elif TIMESS
-    t_max = 30;
-    #elif TIMES
-    t_max = 60;
-    #elif TIMEM
-    t_max = 120;
-    #elif TIMEL
-    t_max = 180;
-    #elif TIMELL
-    t_max = 300;
-    #endif
-    // printf("VNS_MAIN\n");fflush(stdout);
-    int icount = 0, tcount = 0;;
-    do {
-        k = 0; icount = 0;
-        do {
-            
-            #ifdef VBPL
-                firstImprovement(sum_sc, sum_sf, T, x2, k, ng, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size);            
-            #else
-                lpImprovement(sum_sc, sum_sf, T, best_T, Y, x, x2, k, ky, ng, ny, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size, probdata, bestSolution);            
-            #endif
-            k = neighbourhoodChange(sum_sc, sum_sf, x, x2, k, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size);
-    	    if(k==0){
-    	        icount ++;
-    	      // achou solucao melhor
-    	      t_melhor = t;	      
-    	    }
-#ifdef DEBUG_VNS		      
-            // printf("\n%d\n", k);
-#endif
-        } while (k < k_max);
-        if (icount == 0) tcount = 0;
-        tcount += 1;
-        #ifdef SBPL
-        
-        lpShaking(sum_sc, sum_sf, T, best_T, Y, x, x2, k, ky, ng, ny, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size, probdata, bestSolution);            
-        
-        #else
-        shaking(T, best_T, tcount, x2, k, ng, string_size, alpha_size);
-        #endif
-        ky += 1; 
-        if (ky >= ky_max) ky = 0;
-        agora = clock();
-        t = (agora - antes) / ((double) CLOCKS_PER_SEC);
-        // printf("%lf\n", t);fflush(stdout);
-
-        
-    } while (t <= t_max);
-
-
-
-
-
-
-    
-#ifdef DEBUG_VNS		      
-    printf("Solucao Final:\n");
-    for (i = 0; i < string_size; i ++) 
-        printf("%c" , alphabet[x[i]]);
     printf("\n");
-#endif    
-    vns = dc_df_objective_value(sum_sc, sum_sf, sc, sf, sc_size, sf_size, kc, kf, alphabet, alpha_size, string_size, x, &dc, &df);
-#ifdef DEBUG_VNS		      
-    printf("Valor: %lf\n", vns);
-    printf("Dc: %d\n", dc);
-    printf("Df: %d\n", df);
-#endif
+    return 0;
+  }
 
-    agora = clock();
+  // check the existance of instance file
+  fin = fopen(argv[1], "r");
+  if(!fin){
+      printf("\nInstance file not found: %s\n", argv[1]);
+      return 0;
+  }
+  fclose(fin);  
 
-    tempo += (agora - antes) / ((double) CLOCKS_PER_SEC);
-    // salva .sol
+  // set default parameters value
+  for(i=0;i<total_parameters;i++){
+    if(parameters[i].type==INT)
+      *((int*)(parameters[i].param_var)) = parameters[i].idefault;
+    else if (parameters[i].type==DOUBLE)
+      *((double*)(parameters[i].param_var)) = parameters[i].ddefault;
+    else
+      *((char**) (parameters[i].param_var)) = NULL;
+  }
+  output_path = current_path;
 
-#ifndef SUB
-    (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "%s-antigo-vns.sol", filename);
-#else
-    (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "%s-antigo-vns-sub.sol", filename);
-#endif
-    file = fopen(name, "w");
-
-    if(!file)
-    {
-        printf("\nProblem to create solution file: %s", name);
-        return;
+  // set user parameters value
+  error = 0;
+  for(i=2;i<argc && !error;i+=2){
+    for(j=0;j<total_parameters && strcmp(argv[i],parameters[j].param_name);j++)
+      ;
+    if(j>=total_parameters || i==argc-1){
+      printf("\nParameter (%s) invalid or uncompleted.", argv[i]);
+      error = 1;
     }
-    name[0] = '\0';
-
-    fprintf(file, "Tempo: %lfs\n", tempo);
-    fprintf(file, "Tempo da melhor: %lfs\n", t_melhor);
-    fprintf(file, "Objective Value(dc - df) = %.0lf\n", vns);
-    fprintf(file, "Palavra(x) = ");
-
-    for (i = 0; i < string_size; i ++) 
-      fprintf(file,"%c" , alphabet[x[i]]);
-    fprintf(file, "\n");
-
-    /* dc */
-    fprintf(file, "dc = %d\n", dc);
-    /* df */
-    fprintf(file, "df = %d\n", df);
-    fclose(file);
-    
-    for (i = 0; i < string_size; i++) {
-        free (T[i]);
+    else{
+      switch(parameters[j].type){
+      case INT:
+        ivalue = atoi(argv[i+1]);
+        if(ivalue < parameters[j].ilb || ivalue > parameters[j].iub){
+          printf("\nParameter (%s) value (%d) out of range [%d,%d].", argv[i], ivalue, parameters[j].ilb, parameters[j].iub);
+          error = 1;
+          //          break;
+        }
+        else{
+          *((int*)(parameters[j].param_var)) = ivalue;          
+        }
+        break;
+      case DOUBLE:
+        dvalue = atof(argv[i+1]);
+        if(dvalue < parameters[j].dlb || dvalue > parameters[j].dub){
+          printf("\nParameter (%s) value (%lf) out of range [%lf,%lf].", argv[i], dvalue, parameters[j].dlb, parameters[j].dub);
+          error = 1;
+          //          break;
+        }
+        else{
+          *((double*)(parameters[j].param_var)) = dvalue;          
+        }
+        break;
+      case STRING:
+        *((char**) (parameters[j].param_var)) = argv[i+1];
+      }
     }
-    free (T);    
-    
-    for (i = 0; i < sc_size; i++) {
-        free (Y[i]);
+  }
+
+  // print parameters
+  printf("\n\n----------------------------\nParameters settings");
+  for(i=0;i<total_parameters;i++){
+    printf("\nparameter %s (%s): default value=", parameters[i].param_name, parameters[i].description);
+    switch(parameters[i].type){
+    case INT:
+      printf("%d - value = %d", parameters[i].idefault, *( (int*)parameters[i].param_var));
+      break;
+    case DOUBLE:
+      printf("%lf - value = %lf", parameters[i].ddefault, *( (double*)parameters[i].param_var));
+      break;
+    case STRING:
+      printf("(null) - value = %s", *( (char**)parameters[i].param_var));
+      break;
     }
-    free (Y); 
-    return vns;
-    // return 0.0;
+  }
+  printf("\nerror = %d\n", error);
+  if(!error){
+    FILE* fout;
+    char foutname[SCIP_MAXSTRLEN];
+
+    if(param.parameter_stamp != NULL){
+      // complete the fullname of the parameters stamp file
+      sprintf(foutname, "%s/%s", output_path, param.parameter_stamp);
+    }
+    else{
+      // define the parameters stamp file using stamp default = date-time
+      struct tm * ct;
+      const time_t t = time(NULL);
+      param.parameter_stamp = (char*) malloc(sizeof(char)*100);
+      ct = localtime(&t);
+      snprintf(param.parameter_stamp, 100, "d%d%.2d%.2dh%.2d%.2d%.2d", ct->tm_year+1900, ct->tm_mon, ct->tm_mday, ct->tm_hour, ct->tm_min, ct->tm_sec);
+
+      sprintf(foutname, "%s/%s", output_path, param.parameter_stamp);
+    }
+    // check if the stamp already exists
+    fout = fopen(foutname, "r");
+    // TODO: opendir() should be done first to avoid open a directory!
+    if(!fout){
+      // save parameters in the stamp file
+      printf("\nwriting parameters in %s", foutname);
+      fout = fopen(foutname, "w+");
+      for(i=0;i<total_parameters;i++){
+        fprintf(fout, "%s ", parameters[i].param_name);
+        switch(parameters[i].type){
+        case INT:
+          fprintf(fout,"%d\n", *( (int*)parameters[i].param_var));
+          break;
+        case DOUBLE:
+          fprintf(fout,"%lf\n", *( (double*)parameters[i].param_var));
+          break;
+        case STRING:
+          fprintf(fout,"%s\n", *( (char**)parameters[i].param_var));
+          break;
+        }
+      }
+      fclose(fout);
+    }
+    else{
+      // check if the stamp is valid
+      char param_name[100];
+      char svalue[100];
+      while(!feof(fout)){
+        fscanf(fout,"%s", param_name);
+        for(j=0;j<total_parameters && strcmp(param_name,parameters[j].param_name);j++)
+          ;
+        if(j>=total_parameters){
+          printf("\nParameter (%s) invalid or uncompleted.", param_name);
+          error = 1;
+          break;
+        }
+        else{
+          switch(parameters[j].type){
+          case INT:
+            fscanf(fout, "%d\n", &ivalue);
+            if(ivalue < parameters[j].ilb || ivalue > parameters[j].iub){
+              printf("\nParameter (%s) value (%d) out of range [%d,%d].", param_name, ivalue, parameters[j].ilb, parameters[j].iub);
+              error = 1;
+            }
+            else if(ivalue != *((int*)(parameters[j].param_var))){
+              printf("\nParameter (%s) value (%d) differs to saved value = %d.", param_name, ivalue, *((int*)(parameters[j].param_var)));
+              error = 1;
+            }
+            break;
+          case DOUBLE:
+            fscanf(fout, "%lf\n", &dvalue);
+            if(dvalue < parameters[j].dlb || dvalue > parameters[j].dub){
+              printf("\nParameter (%s) value (%lf) out of range [%lf,%lf].", param_name, dvalue, parameters[j].dlb, parameters[j].dub);
+              error = 1;
+            }
+            else if(fabs(dvalue - *((double*)(parameters[j].param_var))) > EPSILON){
+              printf("\nParameter (%s) value (%lf) differs to saved value = %lf.", param_name, dvalue, *((double*)(parameters[j].param_var)));
+              error = 1;
+            }
+            break;
+          case STRING:
+            fscanf(fout, "%s\n", svalue);
+            if(strcmp(svalue,*((char**)(parameters[j].param_var)))){
+              printf("\nParameter (%s) value (%s) differs to saved value = %s.", param_name, svalue, *((char**)(parameters[j].param_var)));
+              error = 1;
+            }
+            break;
+          }
+        } // each parameter
+      } // while !feof
+      fclose(fout);
+    }
+  }
+  return !error;
 }
-
-
 /** creates a SCIP instance with default plugins, evaluates command line parameters, runs SCIP appropriately,
  *  and frees the SCIP instance
  */
@@ -3003,17 +735,18 @@ SCIP_RETCODE runShell(
    )
 {
     int barra = 0 , string_size, alpha_size, sc_size;//, *sum_sc;;
-    double tempo, LB, UB, LB_ROOT, ra = SCIP_INVALID;//, vns = SCIP_INVALID;
+    double tempo, LB, UB, LB_ROOT, ra = 1000000;//, vns = SCIP_INVALID;
     clock_t antes, agora;
     //SCIP_VAR **vars, *var;
     SCIP* scip = NULL;
     SCIP_PROBDATA *probdata;
     int sf_size;
     FILE *file; 
-    double vns, bcpa;
+    double vns=1000000, bcpa = 1000000, vns0 = 1000000;
     SCIP_SOL *bestSolution;
     SCIP_Real solval;   
     FILE *fp;
+    int success;
 
 
     antes = clock();
@@ -3027,7 +760,7 @@ SCIP_RETCODE runShell(
 
     /* include dssp reader */
     SCIP_CALL( SCIPincludeReaderDSSP(scip) );
-    SCIP_CALL( SCIPincludeReadercsp(scip) );
+    //    SCIP_CALL( SCIPincludeReadercsp(scip) );
 
 
     /* include default SCIP plugins */
@@ -3041,26 +774,27 @@ SCIP_RETCODE runShell(
     SCIP_CALL( SCIPsetIntParam(scip,"presolving/maxrestarts",0) );
 
     /* turn off all separation algorithms */
-    SCIP_CALL( SCIPsetSeparating(scip, SCIP_PARAMSETTING_OFF, TRUE) );
+    if(!param.scipdefault){
+      SCIP_CALL( SCIPsetSeparating(scip, SCIP_PARAMSETTING_OFF, TRUE) );
 
-    /* disable heuristics */
-    SCIP_CALL( SCIPsetHeuristics(scip, SCIP_PARAMSETTING_OFF, TRUE) );
+      /* disable heuristics */
+      SCIP_CALL( SCIPsetHeuristics(scip, SCIP_PARAMSETTING_OFF, TRUE) );
 
 // #if defined(BCPA) //|| defined(VNS)
 //     SCIP_CALL( SCIPincludeHeurmyheuristic(scip) );
 // #endif
 
-    /* disable presolving */
-    SCIP_CALL( SCIPsetPresolving(scip, SCIP_PARAMSETTING_OFF, TRUE) );
-
-    SCIP_CALL( SCIPsetIntParam(scip, "propagating/maxrounds", 0) );
-    SCIP_CALL( SCIPsetIntParam(scip, "propagating/maxroundsroot", 0) );
-
-    SCIP_CALL( SCIPsetIntParam(scip, "presolving/maxrounds", 0) );
-    SCIP_CALL( SCIPsetIntParam(scip, "separating/maxrounds", 0) );
-
+      /* disable presolving */
+      SCIP_CALL( SCIPsetPresolving(scip, SCIP_PARAMSETTING_OFF, TRUE) );
+      
+      SCIP_CALL( SCIPsetIntParam(scip, "propagating/maxrounds", 0) );
+      SCIP_CALL( SCIPsetIntParam(scip, "propagating/maxroundsroot", 0) );
+      
+      SCIP_CALL( SCIPsetIntParam(scip, "presolving/maxrounds", 0) );
+      SCIP_CALL( SCIPsetIntParam(scip, "separating/maxrounds", 0) );
+    }
     /* set time limit */
-    SCIP_CALL( SCIPsetRealParam(scip, "limits/time", TIME_LIMIT) );
+    SCIP_CALL( SCIPsetRealParam(scip, "limits/time", 1800));//TIME_LIMIT) );
 
 #ifdef ONLYROOT
     /* run only at root node */
@@ -3096,9 +830,46 @@ SCIP_RETCODE runShell(
     printf(";%d;%d;%d;%d",alpha_size, sc_size,sf_size,string_size);
 
     char solFileName[512];
-    strcpy(solFileName, argv[2]);
+    strcpy(solFileName, "");
+    char date_time_aux[256], date_aux[256];
+    time_t t_aux = time(NULL);
+    struct tm tm = *localtime(&t_aux);
+    sprintf(date_aux, "%d-%02d", tm.tm_year + 1900, tm.tm_mon + 1);
+    sprintf(date_time_aux, "-%d-%02d-%02d_%02d-%02d-%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+    
+    int check = mkdir("results", 0777);
+
+    strcat(solFileName, "results/");
+    strcat(solFileName, date_aux);
+
+    check = mkdir(solFileName, 0777); 
+
+    strcat(solFileName, "/");
+    char dir_grupo1[512], dir_grupo2[512], dir_grupo3[512];
+    sprintf(dir_grupo1, "%sdata/", solFileName);
+    sprintf(dir_grupo2, "%sdata/", solFileName);
+    sprintf(dir_grupo3, "%sdata/", solFileName);
+    check = mkdir(dir_grupo1, 0777);
+    check = mkdir(dir_grupo2, 0777);
+    check = mkdir(dir_grupo3, 0777);
+
+    //    strcat(dir_grupo1, "instancias-tcc/");
+    //    strcat(dir_grupo2, "instancias-tcc/");
+    //    strcat(dir_grupo3, "instancias-tcc/");
+    //    check = mkdir(dir_grupo1, 0777);
+    //    check = mkdir(dir_grupo2, 0777);
+    //    check = mkdir(dir_grupo3, 0777);
+
+    strcat(dir_grupo1, "grupo1/");
+    strcat(dir_grupo2, "grupo2/");
+    strcat(dir_grupo3, "grupo3/");
+    check = mkdir(dir_grupo1, 0777);
+    check = mkdir(dir_grupo2, 0777);
+    check = mkdir(dir_grupo3, 0777);
+
+    strcat(solFileName, argv[2]);
+    
     /* grava melhor solucao */
-    //printSol(scip, argv[2], tempo);
 #ifdef DSP
     strcat(solFileName, "-DSP");
 #endif
@@ -3132,13 +903,69 @@ SCIP_RETCODE runShell(
 #ifdef NONE
     strcat(solFileName, "-NONE");
 #endif
+#ifdef VBPL
+    strcat(solFileName, "-VBPL");
+#elif BLPL
+    strcat(solFileName, "-BLPL");
+#else
+    strcat(solFileName, "-PBPL");
+#endif
 
-printSol(scip, solFileName, tempo);
+#ifdef TIMESSS
+    strcat(solFileName, "-5S");
+#elif TIMESS
+    strcat(solFileName, "-30S");
+#elif TIMES
+    strcat(solFileName, "-60S");
+#elif TIMEM
+    strcat(solFileName, "-120S");
+#elif TIMEL
+    strcat(solFileName, "-180S");
+#elif TIMELL
+    strcat(solFileName, "-300S");
+#else
+    strcat(solFileName, "-3000S");
+#endif
 
-strcat(solFileName, ".resumo");
+#ifdef NSIZES
+    strcat(solFileName, "-SIZE2");
+#elif NSIZEM
+    strcat(solFileName, "-SIZE3");
+#elif NSIZEL
+    strcat(solFileName, "-SIZE4");
+#else
+    strcat(solFileName, "-SIZE4");
+#endif
+
+#ifdef BEST
+    strcat(solFileName, "-BEST");
+#elif FIRST
+    strcat(solFileName, "-FIRST");
+#endif
 
 
-    file = fopen(solFileName, "w");
+#ifdef OMEGAS
+    strcat(solFileName, "-OMEGAS");
+#elif OMEGAM
+    strcat(solFileName, "-OMEGAM");
+#else
+    strcat(solFileName, "-OMEGAL");
+#endif
+
+    strcat(solFileName, date_time_aux);
+    //printf("SOLFILENAME: %s\n", solFileName);
+
+    //    printSol(scip, solFileName, tempo);
+    char solFileNameResumo[512];
+    strcpy(solFileNameResumo, solFileName);
+    strcat(solFileNameResumo, ".resumo");
+
+
+    file = fopen(solFileNameResumo, "w");
+    if(!file){
+      printf("\nProblem to create the file %s", solFileNameResumo);
+      exit(1);
+    }
     fprintf(file, "filename;alpha_size;sc_size;sf_size;string_size;frac;inteiras;lb;ub;root_lb,nodes,time;status;heuristica;valor\n");
     //imprimir nome
     for (int i = 0; i < strlen(argv[2]); i++) {
@@ -3155,10 +982,21 @@ ra = -9999;
 #ifdef RA
     #ifdef ONLYROOT
     antes = clock();
-    ra = heur_RA(scip, argv[2]);
-
+    success = heur_RA(scip, solFileName, tempo, &ra);
+    char name[SCIP_MAXSTRLEN];
     agora = clock();
-    tempo = (agora - antes) / ((double) CLOCKS_PER_SEC);
+    tempo2 = (agora - antes) / ((double) CLOCKS_PER_SEC);
+    FILE *file2;
+    (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "RA.csv");
+        
+    file2 = fopen(name, "a");
+    if(success){
+      fprintf(file2, "%s;%lf;%lf;\n", argv[2], tempo+tempo2, ra);
+    }
+    else{
+      fprintf(file2, "%s;%lf;-;\n", argv[2], tempo+tempo2);
+    }
+    fclose(file2);
     #endif
 #endif
     // int bcpa;
@@ -3166,15 +1004,20 @@ ra = -9999;
 #ifdef BCPA
     #ifdef ONLYROOT
     antes = clock();
-    bcpa = heur_BCPA(scip, argv[2]);
+    success = heur_BCPA(scip, argv[2], &bcpa);
     char name[SCIP_MAXSTRLEN];
     agora = clock();
     tempo2 = (agora - antes) / ((double) CLOCKS_PER_SEC);
     FILE *file2;
     (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "BCPA.csv");
         
-    file2 = fopen(name, "w");
-    fprintf(file2, "%s;%lf;%d;\n", argv[2], tempo+tempo2, bcpa);
+    file2 = fopen(name, "a");
+    if(success){
+      fprintf(file2, "%s;%lf;%lf;\n", argv[2], tempo+tempo2, bcpa);
+    }
+    else{
+      fprintf(file2, "%s;%lf;-;\n", argv[2], tempo+tempo2);
+    }
     fclose(file2);
     #endif
 #endif
@@ -3182,7 +1025,7 @@ ra = -9999;
 #ifdef VNS
     #ifdef ONLYROOT
     antes = clock();    
-    vns = vns_main(scip, argv[2], tempo);
+    success = vns_main(scip, argv[2], tempo, &vns, &vns0);
 
     agora = clock();
     tempo2 = (agora - antes) / ((double) CLOCKS_PER_SEC);
@@ -3192,13 +1035,18 @@ ra = -9999;
     (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "VNS.csv");
         
     file2 = fopen(name, "a");
-    fprintf(file2, "%s;%lf;%d;\n", argv[2], tempo+tempo2, bcpa);
+    if(success){
+      fprintf(file2, "%s;%lf;%lf;%lf\n", argv[2], tempo+tempo2, vns, vns0);//bcpa);
+    }
+    else{
+      fprintf(file2, "%s;%lf;-;-\n", argv[2], tempo+tempo2);//bcpa);
+    }
     fclose(file2);
     #endif
 #endif
 
 #ifdef ONLYROOT
-    printRelaxedSol(scip, argv[2], tempo);
+    printRelaxedSol(scip, solFileName, tempo);
 #endif
 
     /* valida solucao */
@@ -3273,15 +1121,15 @@ ra = -9999;
     for (int i = barra; i < strlen(argv[2]); i++) {
         fprintf(fp, "%c", argv[2][i]);
     }
-    fprintf(fp, ";%ld;%lf;%lf;%lf;%lf;%d;%lf;VNS\n", nNodes, LB, UB, LB_ROOT, tempo,SCIPgetStatus(scip), vns);
+    fprintf(fp, ";%ld;%lf;%lf;%lf;%lf;%d;%lf;%lf;VNS\n", nNodes, LB, UB, LB_ROOT, tempo,SCIPgetStatus(scip), vns, vns0);
     
     fclose(fp);
 
     /*    if(UB>vns+EPSILON){
       UB = vns;
       }*/
-    printf(";%lf;%lf;VNS\n", tempo2, vns);    
-    fprintf(file, ";%lf;%lf;%lf;%lf;%d;%lf;VNS\n", LB, UB, LB_ROOT, tempo,SCIPgetStatus(scip), vns);    
+    printf(";%lf;%lf;%lf;VNS\n", tempo2, vns, vns0);
+    fprintf(file, ";%lf;%lf;%lf;%lf;%d;%lf;%lf;VNS\n", LB, UB, LB_ROOT, tempo,SCIPgetStatus(scip), vns, vns0);    
 #else
     printf(";%lf;%lf;NONE;NONE\n", tempo, LB_ROOT);
     fprintf(file, ";%lf;%lf;%lf;%lf;%d;NONE;NONE\n", LB, UB, LB_ROOT, tempo,SCIPgetStatus(scip));
@@ -3300,20 +1148,174 @@ ra = -9999;
     return SCIP_OKAY;
 }
 
-int
-main(
-    int                        argc,
-    char**                     argv
-    )
+void printHeurSol(SCIP* scip, char* filename, int* x, int dc, int df, double tempo)
 {
-    SCIP_RETCODE retcode;
+  FILE* file;
+  char name[SCIP_MAXSTRLEN], *alphabet;
+  int i, j, string_size, alpha_size;
+  SCIP_PROBDATA* probdata;
+  
+  probdata = SCIPgetProbData(scip);
+  assert(probdata != NULL);
 
-    retcode = runShell(argc, argv, "scip.set");
-    if(retcode != SCIP_OKAY )
-    {
-        SCIPprintError(retcode);
-        return -1;
+  string_size = SCIPprobdataGetString_size(probdata);
+  alphabet = SCIPprobdataGetAlphabet(probdata);
+  alpha_size = SCIPprobdataGetAlpha_size(probdata);
+  
+  //  (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "%s-%s.sol", filename, heurName[param.heur]);
+  (void) SCIPsnprintf(name, SCIP_MAXSTRLEN, "%s.sol", filename);
+
+  file = fopen(name, "w");
+    
+  if(!file)
+  {
+    printf("\nProblem to create solution file: %s\n", name);
+    return;
+  }
+  
+  fprintf(file, "Time: %lfs\n", tempo);
+  fprintf(file, "Objective Value(dc - df) = %d\n", dc-df);
+  fprintf(file, "dc = %d\n", dc);
+  fprintf(file, "df = %d\n", df);
+  fprintf(file, "Target String(x) = ");
+    
+  for(i = 0; i < string_size; i++) {
+    fprintf(file, "%c", symbol_value(alphabet, alpha_size, x[i]));
+  }
+  fprintf(file, "\n");        
+    
+  fprintf(file, "# ");        
+  for (j = 0; j < alpha_size; j++) {
+    fprintf(file, "%c ", symbol_value(alphabet, alpha_size, j));
+  }
+  fprintf(file, "\n");
+  for(i = 0; i < string_size; i++) {
+    fprintf(file, "%d ", i);
+    for (j = 0; j < alpha_size; j++) {
+      if (x[i] != j) {
+        fprintf(file, "0 ");
+      } else {
+        fprintf(file, "1 ");
+      }
     }
-
-    return 0;
+    fprintf(file, "\n");        
+  }
+  printCompilerSettings(file);
+  fclose(file);
 }
+
+/**
+ * main ()
+ */
+int main(int argc, char** argv)
+{
+   SCIP* scip = NULL;
+   int success, *heur, dc, df;
+   char outputname[SCIP_MAXSTRLEN];
+
+   // set default+user parameters
+   if(!setParameters(argc, argv, &param))
+     return 0;
+
+   // check invalid parameters settings
+   if(param.heur==SBPL && (param.shaking != LP_SHAKING || param.local_search != LP_IMPROV)){
+     printf("\nConfiguracao invalida: SBPL incompativel com normal shaking and first/best improvement\n");
+     return 0;
+   }
+   if(param.heur==BLPL && (param.shaking != NORMAL_SHAKING || param.local_search != BEST_IMPROV)){
+     printf("\nConfiguracao invalida: BLPL incompativel com LP shaking and first/LP improvement\n");
+     return 0;
+   }
+   if(param.heur==VBPL && (param.shaking != NORMAL_SHAKING || param.local_search != FIRST_IMPROV)){
+     printf("\nConfiguracao invalida: SBPL incompativel com LP shaking and best/LP improvement\n");
+     return 0;
+   }
+
+   // initialize global vars
+
+   // start clock
+   antes = clock();
+
+   // create and config SCIP using default+user parameters 
+   configScip(&scip);
+
+   // split fullfilename in path and filename
+   splitfullfilename(argv[1]);
+   
+   // read instance
+   if(!readInstance(scip, argv[1])){
+     return 1;
+   }
+
+   // initial settings
+   heurValue = MAXINT;
+   firstUB = MAXINT;
+   if(param.heur!=NONE){     
+     heur = (int*) malloc(sizeof(int)*SCIPprobdataGetString_size(SCIPgetProbData(scip)));
+   }
+
+   /*******************
+    * Problem Solving *
+    *******************/
+   /* solve problem */
+   SCIPinfoMessage(scip, NULL, "\nsolve problem\n");
+   SCIPinfoMessage(scip, NULL, "=============\n\n");
+
+   SCIP_CALL( SCIPsolve(scip) );
+   agora = clock();
+
+   configOutputName(outputname, argv[1], argv[0]);
+
+   // call heuristics
+   printf("\nSolving heuristic: %s...\n", heurName[param.heur]);
+   tempoHeur = clock();
+   switch(param.heur){
+   case RA:
+     success = heur_RA(scip, outputname, (agora-antes)/CLOCKS_PER_SEC, &heurValue, heur, &dc, &df);
+     break;
+   case BCPA:
+     success = heur_BCPA(scip, outputname, &heurValue, heur, &dc, &df);
+     break;
+   case VBPL:
+   case BLPL:
+   case SBPL:
+     success = vns_main(scip, outputname, (agora-antes)/CLOCKS_PER_SEC, &heurValue, &firstUB, heur, &dc, &df);
+     break;
+   case NONE:
+     success = 1;
+   }
+   tempoHeur = (clock() - tempoHeur) / ((double) CLOCKS_PER_SEC); 
+
+   if(!success){
+     printf("\nError...\n");
+     return 1;
+   }
+
+   // save solution found by heuristics
+   if(param.heur!=NONE){
+     printHeurSol(scip, outputname, heur, dc, df, tempoHeur);
+   }
+   // print statistics
+   printStatistic(scip, outputname, dc, df);
+
+   // print cost and time for irace
+   //   if(SCIPgetGap(scip)>0){
+   //     printf("\n%lf %.1lf", 100*SCIPgetGap(scip), (double) param.time_limit);
+   //   }
+   //   else{
+   //     printf("\n%lf %.1lf",0.0,  SCIPgetTotalTime(scip));
+   //   }
+   ////printf("\n%lf %.1lf", 100*SCIPgetGap(scip)+SCIPgetTotalTime(scip)/param.time_limit, SCIPgetTotalTime(scip));
+
+   /********************
+    * Deinitialization *
+    ********************/
+   //   SCIP_CALL( SCIPfree(&scip) );
+   if(param.heur!=NONE){     
+     free(heur);
+   }
+   BMScheckEmptyMemory();
+
+   return 0;
+}
+

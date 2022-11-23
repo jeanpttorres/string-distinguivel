@@ -35,5 +35,6 @@ extern
 SCIP_RETCODE SCIPincludeReaderDSSP(
    SCIP*                 scip                /**< SCIP data structure */
    );
+int readerDssp(SCIP* scip, const char* filename, SCIP_RESULT* result);
 
 #endif
