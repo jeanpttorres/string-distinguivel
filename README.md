@@ -12,6 +12,7 @@ Notice that in order to run SCIP a license is required, but SCIP offers an Acade
 
 ## Installation
 
+Read the SCIP installation steps at https://www.scipopt.org/doc-6.0.0/html/MAKE.php
 
 ## Usage
 
@@ -88,6 +89,40 @@ Example:
 ```
       ./dsssp.out -f instance.in
 ```
+
+## Instance Files
+
+There is the option to load an instance file through the page "Input". A sample file can be found at "data/text_input_example.dssp", but the file expects the following structure:
+
+```
+n
+c f
+m
+kc kf
+a(1)
+..
+a(n)
+sc(1)
+sc(2)
+...
+sc(kc)
+sf(1)
+sf(2)
+...
+sf(kf)
+```
+
+Where n, c, f, m, kc and kf are integers and their meaning is indicated below:
+
+- n: alphabet size
+- c: Sc's cardinality
+- f: Sf's cardinality
+- m: length of the target string
+- kc: parameter used for refining the distances between target string and strings within the Sc set
+- kf: parameter used for refining the distances between target string and strings within the Sf set
+
+The values read for a(1) .. a(n) are the symbols (characteres) from the Alphabet.
+The string in 'Sc' should be writen in sequence, one in each line. The same structure applies for `Sf`, informed right after the last `Sc` sequence.
 
 # References
 
